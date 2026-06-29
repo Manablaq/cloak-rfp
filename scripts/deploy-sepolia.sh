@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy FHECounter to Sepolia and regenerate the frontend's TS ABIs.
+# Deploy CloakRFP to Sepolia and regenerate the frontend's TS ABIs.
 #
 # Required env vars:
 #   SEPOLIA_RPC_URL       - Sepolia JSON-RPC endpoint
@@ -24,7 +24,7 @@ fi
 : "${DEPLOYER_PRIVATE_KEY:?DEPLOYER_PRIVATE_KEY is required (set in .env.local or shell)}"
 
 FORGE_ARGS=(
-  script/DeployFHECounter.s.sol:DeployFHECounter
+  script/DeployCloakRFP.s.sol:DeployCloakRFP
   --rpc-url "$SEPOLIA_RPC_URL"
   --private-key "$DEPLOYER_PRIVATE_KEY"
   --broadcast
@@ -46,4 +46,4 @@ pnpm generate
 
 echo
 echo "✅  Sepolia deploy complete. Frontend reads addresses from"
-echo "    packages/nextjs/contracts/FHECounter.ts."
+echo "    packages/nextjs/contracts/CloakRFP.ts."

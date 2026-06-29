@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy FHECounter to a running anvil node at 127.0.0.1:8545 and regenerate
+# Deploy template contracts to a running anvil node at 127.0.0.1:8545 and regenerate
 # the frontend's per-contract ABI/address files.
 #
 # Prereq: `pnpm chain` is running in another terminal. That script starts
@@ -44,10 +44,23 @@ fi
 grep -E "FHECounter|Owner|===" "$deploy_log" || true
 
 echo
+echo "▸ Deploying CloakRFP"
+if ! PRIVATE_KEY="$ANVIL_PK" forge script script/DeployCloakRFP.s.sol:DeployCloakRFP \
+    --rpc-url "$RPC_URL" \
+    --private-key "$ANVIL_PK" \
+    --broadcast \
+    >"$deploy_log" 2>&1; then
+    echo "❌  forge script failed:" >&2
+    cat "$deploy_log" >&2
+    exit 1
+fi
+grep -E "CloakRFP|Owner|===" "$deploy_log" || true
+
+echo
 echo "▸ Regenerating frontend ABIs + addresses"
 cd "$REPO_ROOT"
 pnpm generate
 
 echo
 echo "✅  Local dev stack ready. Frontend reads addresses from"
-echo "    packages/nextjs/contracts/FHECounter.ts (+ FHECounter.local.ts)."
+echo "    packages/nextjs/contracts/*.ts (+ *.local.ts)."

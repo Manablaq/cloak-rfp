@@ -80,9 +80,11 @@ export default function Home() {
   const createDisabledReason = useMemo(() => {
     if (!cloakRFP.hasContract) return "Contract address missing";
     if (!cloakRFP.isConnected) return "Connect wallet";
+    if (!cloakRFP.tender && !cloakRFP.tenderMissing) return "Loading Tender #0";
+    if (cloakRFP.tender && !cloakRFP.tenderMissing) return "Tender #0 already created";
     if (cloakRFP.isWriting) return "Confirming transaction";
     return "";
-  }, [cloakRFP.hasContract, cloakRFP.isConnected, cloakRFP.isWriting]);
+  }, [cloakRFP.hasContract, cloakRFP.isConnected, cloakRFP.isWriting, cloakRFP.tender, cloakRFP.tenderMissing]);
 
   const bidDisabledReason = useMemo(() => {
     if (!cloakRFP.isConnected) return "Connect wallet";
@@ -138,6 +140,7 @@ export default function Home() {
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (createDisabledReason) return;
     await cloakRFP.createTender(form);
   };
 
@@ -218,6 +221,9 @@ export default function Home() {
                 setForm={setForm}
                 updateNumber={updateNumber}
               />
+            </Reveal>
+            <Reveal>
+              <DemoFlowCard />
             </Reveal>
             <Reveal id="vendor-bid">
               <VendorBidPanel
@@ -595,6 +601,13 @@ function CreateTenderPanel({
   updateNumber: (key: keyof Omit<CreateTenderForm, "metadataURI">, value: string) => void;
 }) {
   const messageTone = cloakRFP.message.toLowerCase().includes("failed") ? "error" : "info";
+  const tenderAlreadyCreated = Boolean(cloakRFP.tender && !cloakRFP.tenderMissing);
+  const buttonLabel = tenderAlreadyCreated
+    ? "Tender #0 already created"
+    : cloakRFP.isWriting
+      ? "Confirming tender"
+      : createDisabledReason || "Create public tender";
+
   return (
     <form className="premium-card p-5 sm:p-6 lg:p-7" onSubmit={onSubmit}>
       <div className="border-b border-[var(--border)] pb-6">
@@ -649,12 +662,45 @@ function CreateTenderPanel({
         </div>
 
         <button className="primary-action full" disabled={Boolean(createDisabledReason)} type="submit">
-          {cloakRFP.isWriting ? "Confirming tender" : createDisabledReason || "Create public tender"}
+          {buttonLabel}
         </button>
+
+        {tenderAlreadyCreated && (
+          <p className="rounded-2xl border border-[var(--border)] bg-[var(--panel-soft)] px-4 py-3 text-sm leading-6 text-[var(--muted)]">
+            This MVP is focused on Tender #0. Multi-tender browsing is planned for a later milestone.
+          </p>
+        )}
 
         {cloakRFP.message && <InlineMessage message={cloakRFP.message} tone={messageTone} />}
       </div>
     </form>
+  );
+}
+
+function DemoFlowCard() {
+  const steps = [
+    "Create Tender #0",
+    "Submit first encrypted bid",
+    "Switch wallet and submit second encrypted bid",
+    "Resolve pending comparison",
+    "Repeat with another vendor",
+  ];
+
+  return (
+    <section className="demo-flow-card">
+      <div>
+        <p className="micro-label">How to test</p>
+        <h2 className="section-title mt-2">Demo flow</h2>
+      </div>
+      <ol className="demo-flow-list">
+        {steps.map((step, index) => (
+          <li key={step}>
+            <span>{index + 1}</span>
+            <p>{step}</p>
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 
@@ -1419,6 +1465,54 @@ function ThemeStyles() {
       .info-card,
       .weight-card {
         padding: 1rem;
+      }
+
+      .demo-flow-card {
+        border: 1px solid var(--border);
+        border-radius: 26px;
+        background:
+          linear-gradient(145deg, color-mix(in srgb, var(--accent-cyan-soft) 34%, transparent), transparent 56%),
+          linear-gradient(180deg, rgb(255 255 255 / 0.035), transparent), var(--panel);
+        padding: 1.25rem;
+        box-shadow: var(--card-shadow);
+      }
+
+      .demo-flow-list {
+        margin-top: 1rem;
+        display: grid;
+        gap: 0.65rem;
+      }
+
+      .demo-flow-list li {
+        display: grid;
+        grid-template-columns: 2rem minmax(0, 1fr);
+        align-items: center;
+        gap: 0.75rem;
+        border: 1px solid color-mix(in srgb, var(--accent-cyan) 18%, transparent);
+        border-radius: 18px;
+        background: linear-gradient(180deg, rgb(255 255 255 / 0.024), transparent), var(--panel-soft);
+        padding: 0.72rem 0.82rem;
+        color: var(--heading);
+        font-size: 0.88rem;
+        font-weight: 800;
+        line-height: 1.35;
+      }
+
+      .demo-flow-list span {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 2rem;
+        height: 2rem;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--accent-cyan-soft) 82%, var(--panel-soft));
+        color: var(--accent-cyan);
+        font-size: 0.78rem;
+        font-weight: 950;
+      }
+
+      .demo-flow-list p {
+        min-width: 0;
       }
 
       .weight-card {

@@ -14,7 +14,7 @@ Public procurement and competitive RFP workflows need transparency around rules,
 
 CloakRFP keeps tender metadata and scoring weights public, then accepts encrypted vendor bids. The contract computes a weighted score over encrypted bid fields and tracks the current best vendor. When a later vendor submits a bid, the contract creates an encrypted comparison against the current best score. That comparison can be publicly decrypted as a boolean so the contract can update the best vendor without revealing the bid values or scores.
 
-The current MVP is intentionally focused on a single demo tender: Tender #0.
+The current MVP supports multiple public tenders in the UI: users can create tenders, select Tender #0, Tender #1, and later IDs, then bid on or resolve the selected tender.
 
 ## How CloakRFP Uses Zama FHE
 
@@ -59,28 +59,27 @@ Local demo note: the local chain uses Zama's cleartext development stack for tes
 
 Implemented:
 
-- Tender #0 creation.
+- Multi-tender creation and browsing.
 - Public tender metadata and scoring weights.
 - Encrypted vendor bid submission.
 - Encrypted score computation.
 - Sequential multi-vendor bidding.
 - Pending encrypted comparison resolution.
-- Premium Next.js demo UI with wallet connection, refresh state, bid form, resolve action, and demo flow guidance.
+- Premium Next.js demo UI with wallet connection, refresh state, tender browsing, bid form, resolve action, and current best vendor state.
 
 Not implemented yet:
 
-- Winner reveal UI.
-- Multi-tender browsing.
 - Production deployment configuration for a live public demo.
 - Security audit or production hardening.
 
 ## Demo Flow
 
-1. Create Tender #0.
-2. Submit the first encrypted bid.
-3. Switch wallet and submit a second encrypted bid.
-4. Resolve the pending encrypted comparison.
-5. Repeat with another vendor.
+1. Create a tender.
+2. Select the tender in the Tender Browser.
+3. Submit the first encrypted bid.
+4. Switch wallet and submit a second encrypted bid.
+5. Resolve the pending encrypted comparison.
+6. Create or select another tender.
 
 See [docs/demo-script.md](docs/demo-script.md) for a reviewer-friendly walkthrough.
 
@@ -160,7 +159,7 @@ Common Anvil test wallets:
 - Account 0 address: `0xf39F...2266`
 - Account 1 address: `0x7099...79C8`
 
-Use one of the default Anvil accounts printed by your local node. For the demo, connect with the first wallet to create Tender #0 and submit the first bid. Then switch to a second wallet to submit the next vendor bid.
+Use one of the default Anvil accounts printed by your local node. For the demo, connect with the first wallet to create a tender and submit the first bid to the selected tender. Then switch to a second wallet to submit the next vendor bid.
 
 Never use local demo keys on real networks. Fund test accounts with `anvil_setBalance` if needed.
 
@@ -168,11 +167,10 @@ If MetaMask shows stale balances, nonce errors, or old activity after restarting
 
 ## Known MVP Limitations
 
-- Tender #0 only. The UI intentionally focuses on a single tender.
-- No winner reveal UI yet.
-- No multi-tender browser yet.
+- No final award/close tender flow yet; the UI shows the current best vendor while tenders remain open.
 - Local demo only unless the contracts are deployed and frontend addresses are regenerated for another chain.
 - Local FHE execution uses a cleartext development stack; it is not equivalent to a production privacy deployment.
+- Private bid values and encrypted numeric scores are not revealed in the UI.
 - The project has not been audited.
 
 ## Architecture Summary
@@ -187,7 +185,7 @@ Contracts:
 
 Frontend:
 
-- `packages/nextjs/app/page.tsx` contains the premium Tender #0 demo UI.
+- `packages/nextjs/app/page.tsx` contains the premium multi-tender demo UI.
 - `packages/nextjs/hooks/cloakrfp/useCloakRFPWagmi.ts` wraps contract reads/writes, Zama encryption, public decrypt, transaction receipt waiting, and user-facing status messages.
 - `packages/nextjs/contracts/` contains generated ABI/address files consumed by the frontend.
 - `packages/nextjs/components/DappWrapperWithProviders.tsx` wires the app providers, including wallet and Zama SDK context.

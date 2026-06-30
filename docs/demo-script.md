@@ -1,6 +1,6 @@
 # CloakRFP Demo Script
 
-This script is for a local reviewer demo of the Tender #0 MVP.
+This script is for a local reviewer demo of the multi-tender CloakRFP MVP.
 
 ## 1. Start the Local Chain
 
@@ -41,17 +41,17 @@ Never use local demo keys on real networks. Fund test accounts with `anvil_setBa
 
 Connect this wallet in the app. It will act as the buyer for the demo.
 
-## 4. Create Tender #0
+## 4. Create and Select a Tender
 
 In the Create Tender panel:
 
-1. Leave the default metadata URI or edit it.
+1. Leave the suggested metadata URI or edit it.
 2. Leave the default public scoring weights or adjust them.
 3. Click `Create public tender`.
 4. Confirm the transaction in the wallet.
-5. Wait for the UI to refresh Tender #0.
+5. Wait for the UI to refresh and auto-select the newly created tender.
 
-After creation, the Create Tender button should become disabled with `Tender #0 already created`. This is expected because the MVP is focused on Tender #0.
+The Tender Browser should show the total tender count and a pill for the selected tender, starting with Tender #0. You can create additional tenders later and switch between Tender #0, Tender #1, and later IDs.
 
 ## 5. Submit the First Encrypted Bid
 
@@ -61,7 +61,7 @@ Using the same connected wallet:
 2. Enter bid values for `price`, `deliveryDays`, `warrantyMonths`, and `quantity`.
 3. Click `Submit encrypted bid`.
 4. Confirm the wallet transaction.
-5. Wait for confirmation and Tender #0 refresh.
+5. Wait for confirmation and selected tender refresh.
 
 The first bid becomes the current best vendor because there is no existing best bid to compare against.
 
@@ -90,9 +90,9 @@ The frontend will:
 
 1. Read the pending encrypted comparison handle from `getPendingComparison`.
 2. Publicly decrypt that comparison with Zama's frontend SDK.
-3. Submit `resolvePendingBest(0, cleartext, decryptionProof)`.
+3. Submit `resolvePendingBest(selectedTenderId, cleartext, decryptionProof)`.
 4. Wait for the transaction receipt.
-5. Refresh Tender #0.
+5. Refresh the selected tender.
 
 After resolution, the pending vendor is cleared and the bid form becomes available for another vendor wallet.
 
@@ -115,3 +115,7 @@ Switch to another Anvil account, submit another encrypted bid, then resolve the 
 ```text
 submit encrypted bid -> resolve pending comparison -> submit next encrypted bid
 ```
+
+## 11. Create or Select Another Tender
+
+Return to the Create Tender panel and create another tender. The UI should auto-select the new tender and add another Tender Browser pill. You can switch back to an earlier tender to confirm each tender keeps its own buyer, metadata URI, weights, best vendor, and pending comparison state.

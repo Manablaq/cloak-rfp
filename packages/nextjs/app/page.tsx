@@ -1,6 +1,6 @@
 "use client";
 
-import type { Dispatch, FormEvent, ReactNode, SetStateAction } from "react";
+import type { FormEvent, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { RainbowKitCustomConnectButton } from "~~/components/helper/RainbowKitCustomConnectButton";
 import { CreateTenderForm, VendorBidForm, useCloakRFPWagmi } from "~~/hooks/cloakrfp/useCloakRFPWagmi";
@@ -10,19 +10,36 @@ const THEME_STORAGE_KEY = "cloakrfp-theme";
 
 type ThemeMode = "light" | "dark";
 
-const initialForm: CreateTenderForm = {
-  metadataURI: "ipfs://cloakrfp-tender-0",
-  priceWeight: 1,
-  deliveryDaysWeight: 5,
-  warrantyMonthsWeight: 0,
-  quantityWeight: 2,
+type CreateTenderDraft = {
+  metadataURI: string;
+  priceWeight: string;
+  deliveryDaysWeight: string;
+  warrantyMonthsWeight: string;
+  quantityWeight: string;
 };
 
-const initialBidForm: VendorBidForm = {
-  price: 100,
-  deliveryDays: 5,
-  warrantyMonths: 12,
-  quantity: 20,
+type VendorBidDraft = {
+  price: string;
+  deliveryDays: string;
+  warrantyMonths: string;
+  quantity: string;
+};
+
+const UINT32_MAX = 4_294_967_295n;
+
+const initialForm: CreateTenderDraft = {
+  metadataURI: "",
+  priceWeight: "",
+  deliveryDaysWeight: "",
+  warrantyMonthsWeight: "",
+  quantityWeight: "",
+};
+
+const initialBidForm: VendorBidDraft = {
+  price: "",
+  deliveryDays: "",
+  warrantyMonths: "",
+  quantity: "",
 };
 
 const shortenAddress = (address?: string) => {
@@ -35,10 +52,61 @@ const displayAddress = (address?: string, empty = "None") => {
   return shortenAddress(address);
 };
 
+const parseUint32Input = (value: string) => {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const parsed = BigInt(trimmed);
+  if (parsed > UINT32_MAX) return undefined;
+  return Number(parsed);
+};
+
+const hasBlankCreateField = (form: CreateTenderDraft) =>
+  !form.metadataURI.trim() ||
+  !form.priceWeight.trim() ||
+  !form.deliveryDaysWeight.trim() ||
+  !form.warrantyMonthsWeight.trim() ||
+  !form.quantityWeight.trim();
+
+const buildCreateTenderForm = (form: CreateTenderDraft): CreateTenderForm | undefined => {
+  const priceWeight = parseUint32Input(form.priceWeight);
+  const deliveryDaysWeight = parseUint32Input(form.deliveryDaysWeight);
+  const warrantyMonthsWeight = parseUint32Input(form.warrantyMonthsWeight);
+  const quantityWeight = parseUint32Input(form.quantityWeight);
+  if (
+    priceWeight === undefined ||
+    deliveryDaysWeight === undefined ||
+    warrantyMonthsWeight === undefined ||
+    quantityWeight === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    metadataURI: form.metadataURI.trim(),
+    priceWeight,
+    deliveryDaysWeight,
+    warrantyMonthsWeight,
+    quantityWeight,
+  };
+};
+
+const hasBlankBidField = (form: VendorBidDraft) =>
+  !form.price.trim() || !form.deliveryDays.trim() || !form.warrantyMonths.trim() || !form.quantity.trim();
+
+const buildVendorBidForm = (form: VendorBidDraft): VendorBidForm | undefined => {
+  const price = parseUint32Input(form.price);
+  const deliveryDays = parseUint32Input(form.deliveryDays);
+  const warrantyMonths = parseUint32Input(form.warrantyMonths);
+  const quantity = parseUint32Input(form.quantity);
+  if (price === undefined || deliveryDays === undefined || warrantyMonths === undefined || quantity === undefined) {
+    return undefined;
+  }
+  return { price, deliveryDays, warrantyMonths, quantity };
+};
+
 export default function Home() {
   const cloakRFP = useCloakRFPWagmi();
-  const [form, setForm] = useState<CreateTenderForm>(initialForm);
-  const [bidForm, setBidForm] = useState<VendorBidForm>(initialBidForm);
+  const [form, setForm] = useState<CreateTenderDraft>(initialForm);
+  const [bidForm, setBidForm] = useState<VendorBidDraft>(initialBidForm);
   const [copied, setCopied] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>("dark");
   const [themeLoaded, setThemeLoaded] = useState(false);
@@ -59,7 +127,14 @@ export default function Home() {
       return { label: "Not configured", tone: "status-neutral", description: "Deployment address unavailable" };
     }
     if (cloakRFP.tenderMissing) {
-      return { label: "Not created", tone: "status-neutral", description: "Tender 0 is ready to initialize" };
+      return {
+        label: "Not created",
+        tone: "status-neutral",
+        description:
+          cloakRFP.tenderCount === 0n
+            ? "Create the first public tender to start browsing."
+            : `${cloakRFP.selectedTenderLabel} is ready to initialize`,
+      };
     }
     if (!cloakRFP.tender) {
       return { label: "Loading", tone: "status-info", description: "Reading public tender state" };
@@ -72,26 +147,38 @@ export default function Home() {
       };
     }
     if (cloakRFP.tender.hasPublicBestVendor) {
-      return { label: "Has best vendor", tone: "status-success", description: "Public winner state is available" };
+      return {
+        label: "Current best vendor",
+        tone: "status-success",
+        description: "Encrypted comparison resolved",
+      };
     }
     return { label: "Open", tone: "status-info", description: "Public rules are live" };
-  }, [cloakRFP.hasContract, cloakRFP.tender, cloakRFP.tenderMissing]);
+  }, [
+    cloakRFP.hasContract,
+    cloakRFP.selectedTenderLabel,
+    cloakRFP.tender,
+    cloakRFP.tenderCount,
+    cloakRFP.tenderMissing,
+  ]);
 
   const createDisabledReason = useMemo(() => {
     if (!cloakRFP.hasContract) return "Contract address missing";
     if (!cloakRFP.isConnected) return "Connect wallet";
-    if (!cloakRFP.tender && !cloakRFP.tenderMissing) return "Loading Tender #0";
-    if (cloakRFP.tender && !cloakRFP.tenderMissing) return "Tender #0 already created";
+    if (hasBlankCreateField(form)) return "Enter tender metadata and weights";
+    if (!buildCreateTenderForm(form)) return "Use whole numbers from 0 to 4294967295";
     if (cloakRFP.isWriting) return "Confirming transaction";
     return "";
-  }, [cloakRFP.hasContract, cloakRFP.isConnected, cloakRFP.isWriting, cloakRFP.tender, cloakRFP.tenderMissing]);
+  }, [cloakRFP.hasContract, cloakRFP.isConnected, cloakRFP.isWriting, form]);
 
   const bidDisabledReason = useMemo(() => {
     if (!cloakRFP.isConnected) return "Connect wallet";
     if (!cloakRFP.hasContract) return "Contract address missing";
-    if (cloakRFP.tenderMissing) return "Create tender #0 first";
-    if (!cloakRFP.tender) return "Load tender #0";
+    if (cloakRFP.tenderMissing) return "Create a tender first";
+    if (!cloakRFP.tender) return `Load ${cloakRFP.selectedTenderLabel}`;
     if (cloakRFP.tender.hasPendingVendor) return "Resolve pending comparison first";
+    if (hasBlankBidField(bidForm)) return "Enter all bid fields";
+    if (!buildVendorBidForm(bidForm)) return "Use whole numbers from 0 to 4294967295";
     if (cloakRFP.isWriting) return "Confirming transaction";
     if (cloakRFP.isSubmittingBid) return "Submitting encrypted bid";
     return "";
@@ -100,15 +187,17 @@ export default function Home() {
     cloakRFP.isConnected,
     cloakRFP.isSubmittingBid,
     cloakRFP.isWriting,
+    cloakRFP.selectedTenderLabel,
     cloakRFP.tender,
     cloakRFP.tenderMissing,
+    bidForm,
   ]);
 
   const resolveDisabledReason = useMemo(() => {
     if (!cloakRFP.isConnected) return "Connect wallet";
     if (!cloakRFP.hasContract) return "Contract address missing";
-    if (cloakRFP.tenderMissing) return "Create tender #0 first";
-    if (!cloakRFP.tender) return "Load tender #0";
+    if (cloakRFP.tenderMissing) return "Create a tender first";
+    if (!cloakRFP.tender) return `Load ${cloakRFP.selectedTenderLabel}`;
     if (!cloakRFP.tender.hasPendingVendor) return "No pending comparison";
     if (cloakRFP.isResolvingPendingBest) return "Resolving comparison";
     if (cloakRFP.isWriting) return "Confirming transaction";
@@ -118,36 +207,36 @@ export default function Home() {
     cloakRFP.isConnected,
     cloakRFP.isResolvingPendingBest,
     cloakRFP.isWriting,
+    cloakRFP.selectedTenderLabel,
     cloakRFP.tender,
     cloakRFP.tenderMissing,
   ]);
 
-  const updateNumber = (key: keyof Omit<CreateTenderForm, "metadataURI">, value: string) => {
-    const parsed = value === "" ? 0 : Number(value);
-    setForm(current => ({
-      ...current,
-      [key]: Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : current[key],
-    }));
+  const updateWeightField = (key: keyof Omit<CreateTenderDraft, "metadataURI">, value: string) => {
+    setForm(current => ({ ...current, [key]: value }));
   };
 
-  const updateBidNumber = (key: keyof VendorBidForm, value: string) => {
-    const parsed = value === "" ? 0 : Number(value);
-    setBidForm(current => ({
-      ...current,
-      [key]: Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : current[key],
-    }));
+  const updateBidField = (key: keyof VendorBidDraft, value: string) => {
+    setBidForm(current => ({ ...current, [key]: value }));
   };
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (createDisabledReason) return;
-    await cloakRFP.createTender(form);
+    const payload = buildCreateTenderForm(form);
+    if (!payload) return;
+    const createdTenderId = await cloakRFP.createTender(payload);
+    if (createdTenderId === undefined) return;
+    setForm(initialForm);
   };
 
   const onBidSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (bidDisabledReason) return;
-    await cloakRFP.submitBid(bidForm);
+    const payload = buildVendorBidForm(bidForm);
+    if (!payload) return;
+    const submitted = await cloakRFP.submitBid(payload);
+    if (submitted) setBidForm(initialBidForm);
   };
 
   const onResolvePendingBest = async () => {
@@ -203,27 +292,29 @@ export default function Home() {
         )}
 
         <div className="grid grid-cols-1 gap-8 xl:grid-cols-[1.22fr_0.78fr]">
-          <Reveal id="tender-dashboard">
-            <TenderDashboard
-              cloakRFP={cloakRFP}
-              onResolvePendingBest={onResolvePendingBest}
-              resolveDisabledReason={resolveDisabledReason}
-              tenderStatus={tenderStatus}
-            />
-          </Reveal>
+          <div className="space-y-8">
+            <Reveal>
+              <TenderBrowser cloakRFP={cloakRFP} />
+            </Reveal>
+            <Reveal id="tender-dashboard">
+              <TenderDashboard
+                cloakRFP={cloakRFP}
+                onResolvePendingBest={onResolvePendingBest}
+                resolveDisabledReason={resolveDisabledReason}
+                tenderStatus={tenderStatus}
+              />
+            </Reveal>
+          </div>
           <div className="space-y-8">
             <Reveal id="create-tender">
               <CreateTenderPanel
                 cloakRFP={cloakRFP}
                 createDisabledReason={createDisabledReason}
                 form={form}
+                onMetadataURIChange={value => setForm(current => ({ ...current, metadataURI: value }))}
                 onSubmit={onSubmit}
-                setForm={setForm}
-                updateNumber={updateNumber}
+                updateNumber={updateWeightField}
               />
-            </Reveal>
-            <Reveal>
-              <DemoFlowCard />
             </Reveal>
             <Reveal id="vendor-bid">
               <VendorBidPanel
@@ -231,7 +322,7 @@ export default function Home() {
                 cloakRFP={cloakRFP}
                 form={bidForm}
                 onSubmit={onBidSubmit}
-                updateNumber={updateBidNumber}
+                updateNumber={updateBidField}
               />
             </Reveal>
           </div>
@@ -281,7 +372,7 @@ function Hero({ onCreateClick, onDashboardClick }: { onCreateClick: () => void; 
               Create tender
             </button>
             <button className="secondary-action" onClick={onDashboardClick} type="button">
-              View tender #0
+              View tenders
             </button>
           </div>
           <p className="mt-4 text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
@@ -417,6 +508,62 @@ function StatusCell({
   );
 }
 
+function TenderBrowser({ cloakRFP }: { cloakRFP: ReturnType<typeof useCloakRFPWagmi> }) {
+  const hasTenders = cloakRFP.tenderIds.length > 0;
+
+  return (
+    <section className="premium-card p-5 sm:p-6 lg:p-7">
+      <div className="flex flex-col gap-5 border-b border-[var(--border)] pb-6 md:flex-row md:items-start md:justify-between">
+        <div>
+          <p className="micro-label">Tender browser</p>
+          <h2 className="section-title mt-2">Select tender</h2>
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            {hasTenders ? "Choose the tender to view, bid on, or resolve." : "Create a tender to start browsing."}
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-3 sm:min-w-64">
+          <InfoCard label="Total tenders" value={cloakRFP.tenderCount.toString()} />
+          <InfoCard label="Selected" value={cloakRFP.selectedTenderLabel} />
+        </div>
+      </div>
+
+      {hasTenders ? (
+        <div className="mt-5 flex flex-wrap gap-3">
+          {cloakRFP.tenderIds.map(tenderId => {
+            const tenderLabel = `Tender #${tenderId.toString()}`;
+            const selected = tenderId === cloakRFP.selectedTenderId;
+            return (
+              <button
+                className={`tender-chip ${selected ? "selected" : ""}`}
+                disabled={selected || cloakRFP.isLoadingTender}
+                key={tenderId.toString()}
+                onClick={() => cloakRFP.selectTender(tenderId)}
+                type="button"
+              >
+                {tenderLabel}
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="empty-state mt-6">
+          <div className="empty-visual" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </div>
+          <div>
+            <h3 className="text-2xl font-bold text-[var(--heading)]">No tenders yet</h3>
+            <p className="mt-3 max-w-2xl text-sm leading-7 text-[var(--muted)]">
+              The first created tender will become Tender #0 and will be selected automatically.
+            </p>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function TenderDashboard({
   cloakRFP,
   onResolvePendingBest,
@@ -442,7 +589,7 @@ function TenderDashboard({
         <div>
           <p className="micro-label">Tender dashboard</p>
           <div className="mt-3 flex flex-wrap items-center gap-3">
-            <h2 className="section-title">Tender #0</h2>
+            <h2 className="section-title">{cloakRFP.selectedTenderLabel}</h2>
             <span className={`lifecycle-pill ${tenderStatus.tone}`}>
               <span className="lifecycle-dot" />
               {tenderStatus.label}
@@ -462,7 +609,9 @@ function TenderDashboard({
 
       {cloakRFP.readError && <Notice message={cloakRFP.readError} title="Read failed" tone="error" />}
       {cloakRFP.message && <InlineMessage message={cloakRFP.message} tone={messageTone} />}
-      {cloakRFP.tenderMissing && <TenderEmptyState />}
+      {cloakRFP.tenderMissing && (
+        <TenderEmptyState tenderCount={cloakRFP.tenderCount} tenderLabel={cloakRFP.selectedTenderLabel} />
+      )}
 
       {cloakRFP.tender && (
         <div className="mt-6 space-y-6">
@@ -485,6 +634,8 @@ function TenderDashboard({
               value={displayAddress(cloakRFP.tender.pendingVendor)}
             />
           </div>
+
+          <BestVendorState tender={cloakRFP.tender} />
 
           <ResolvePendingPanel
             cloakRFP={cloakRFP}
@@ -514,7 +665,9 @@ function TenderDashboard({
 
       {!cloakRFP.tender && !cloakRFP.tenderMissing && !cloakRFP.readError && (
         <div className="mt-6 rounded-[22px] border border-[var(--border)] bg-[var(--panel-soft)] p-6 text-sm text-[var(--muted)]">
-          {cloakRFP.hasContract ? "Loading tender 0 public data." : "Connect to a chain with a CloakRFP deployment."}
+          {cloakRFP.hasContract
+            ? `Loading ${cloakRFP.selectedTenderLabel} public data.`
+            : "Connect to a chain with a CloakRFP deployment."}
         </div>
       )}
     </section>
@@ -534,8 +687,8 @@ function ResolvePendingPanel({
   const resolveTone = cloakRFP.resolveStatus === "error" ? "error" : "info";
   const title = hasPending ? "Pending comparison ready" : "No pending comparison";
   const detail = hasPending
-    ? "Public decryption will verify the encrypted comparison and update the best vendor state."
-    : "The tender is ready for the next encrypted vendor bid.";
+    ? `Public decryption will verify ${cloakRFP.selectedTenderLabel}'s encrypted comparison and update the best vendor state.`
+    : `${cloakRFP.selectedTenderLabel} is ready for the next encrypted vendor bid.`;
   const buttonLabel =
     cloakRFP.resolveStatus === "decrypting"
       ? "Decrypting comparison"
@@ -567,7 +720,13 @@ function ResolvePendingPanel({
   );
 }
 
-function TenderEmptyState() {
+function TenderEmptyState({ tenderCount, tenderLabel }: { tenderCount: bigint; tenderLabel: string }) {
+  const title = tenderCount === 0n ? "No tender has been created" : `${tenderLabel} has not been created`;
+  const detail =
+    tenderCount === 0n
+      ? "Create a public tender before encrypted vendor bid entry opens."
+      : "Start with public rules and weights before encrypted vendor bid entry opens.";
+
   return (
     <div className="empty-state mt-6">
       <div className="empty-visual" aria-hidden="true">
@@ -576,10 +735,8 @@ function TenderEmptyState() {
         <span />
       </div>
       <div>
-        <h3 className="text-2xl font-bold text-[var(--heading)]">Tender #0 has not been created</h3>
-        <p className="mt-3 max-w-2xl text-sm leading-7 text-[var(--muted)]">
-          Start with public rules and weights before encrypted vendor bid entry opens.
-        </p>
+        <h3 className="text-2xl font-bold text-[var(--heading)]">{title}</h3>
+        <p className="mt-3 max-w-2xl text-sm leading-7 text-[var(--muted)]">{detail}</p>
       </div>
     </div>
   );
@@ -589,24 +746,21 @@ function CreateTenderPanel({
   cloakRFP,
   createDisabledReason,
   form,
+  onMetadataURIChange,
   onSubmit,
-  setForm,
   updateNumber,
 }: {
   cloakRFP: ReturnType<typeof useCloakRFPWagmi>;
   createDisabledReason: string;
-  form: CreateTenderForm;
+  form: CreateTenderDraft;
+  onMetadataURIChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
-  setForm: Dispatch<SetStateAction<CreateTenderForm>>;
-  updateNumber: (key: keyof Omit<CreateTenderForm, "metadataURI">, value: string) => void;
+  updateNumber: (key: keyof Omit<CreateTenderDraft, "metadataURI">, value: string) => void;
 }) {
   const messageTone = cloakRFP.message.toLowerCase().includes("failed") ? "error" : "info";
-  const tenderAlreadyCreated = Boolean(cloakRFP.tender && !cloakRFP.tenderMissing);
-  const buttonLabel = tenderAlreadyCreated
-    ? "Tender #0 already created"
-    : cloakRFP.isWriting
-      ? "Confirming tender"
-      : createDisabledReason || "Create public tender";
+  const buttonLabel = cloakRFP.isWriting
+    ? "Confirming tender"
+    : createDisabledReason || (cloakRFP.tenderCount === 0n ? "Create public tender" : "Create another tender");
 
   return (
     <form className="premium-card p-5 sm:p-6 lg:p-7" onSubmit={onSubmit}>
@@ -626,10 +780,14 @@ function CreateTenderPanel({
           <input
             className="premium-input"
             id="metadataURI"
-            onChange={event => setForm(current => ({ ...current, metadataURI: event.target.value }))}
-            placeholder="ipfs://..."
+            onChange={event => onMetadataURIChange(event.target.value)}
+            placeholder="ipfs://your-tender-metadata"
+            required
             value={form.metadataURI}
           />
+          <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+            Enter a metadata URI for this tender, for example an IPFS URI or external procurement reference.
+          </p>
         </div>
 
         <div>
@@ -641,21 +799,25 @@ function CreateTenderPanel({
             <NumberInput
               label="Price weight"
               onChange={value => updateNumber("priceWeight", value)}
+              placeholder="Enter price weight"
               value={form.priceWeight}
             />
             <NumberInput
               label="Delivery days"
               onChange={value => updateNumber("deliveryDaysWeight", value)}
+              placeholder="Enter delivery weight"
               value={form.deliveryDaysWeight}
             />
             <NumberInput
               label="Warranty months"
               onChange={value => updateNumber("warrantyMonthsWeight", value)}
+              placeholder="Enter warranty weight"
               value={form.warrantyMonthsWeight}
             />
             <NumberInput
               label="Quantity"
               onChange={value => updateNumber("quantityWeight", value)}
+              placeholder="Enter quantity weight"
               value={form.quantityWeight}
             />
           </div>
@@ -665,42 +827,9 @@ function CreateTenderPanel({
           {buttonLabel}
         </button>
 
-        {tenderAlreadyCreated && (
-          <p className="rounded-2xl border border-[var(--border)] bg-[var(--panel-soft)] px-4 py-3 text-sm leading-6 text-[var(--muted)]">
-            This MVP is focused on Tender #0. Multi-tender browsing is planned for a later milestone.
-          </p>
-        )}
-
         {cloakRFP.message && <InlineMessage message={cloakRFP.message} tone={messageTone} />}
       </div>
     </form>
-  );
-}
-
-function DemoFlowCard() {
-  const steps = [
-    "Create Tender #0",
-    "Submit first encrypted bid",
-    "Switch wallet and submit second encrypted bid",
-    "Resolve pending comparison",
-    "Repeat with another vendor",
-  ];
-
-  return (
-    <section className="demo-flow-card">
-      <div>
-        <p className="micro-label">How to test</p>
-        <h2 className="section-title mt-2">Demo flow</h2>
-      </div>
-      <ol className="demo-flow-list">
-        {steps.map((step, index) => (
-          <li key={step}>
-            <span>{index + 1}</span>
-            <p>{step}</p>
-          </li>
-        ))}
-      </ol>
-    </section>
   );
 }
 
@@ -713,11 +842,12 @@ function VendorBidPanel({
 }: {
   bidDisabledReason: string;
   cloakRFP: ReturnType<typeof useCloakRFPWagmi>;
-  form: VendorBidForm;
+  form: VendorBidDraft;
   onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
-  updateNumber: (key: keyof VendorBidForm, value: string) => void;
+  updateNumber: (key: keyof VendorBidDraft, value: string) => void;
 }) {
   const messageTone = cloakRFP.bidStatus === "error" ? "error" : "info";
+  const hasSelectedTender = Boolean(cloakRFP.tender);
   const pendingComparisonMessage = cloakRFP.tender?.hasPendingVendor
     ? "A pending encrypted comparison must be resolved before another bid can be submitted."
     : "";
@@ -734,26 +864,42 @@ function VendorBidPanel({
     <form className="premium-card p-5 sm:p-6 lg:p-7" onSubmit={onSubmit}>
       <div className="border-b border-[var(--border)] pb-6">
         <p className="micro-label">Vendor workflow</p>
-        <h2 className="section-title mt-2">Submit bid</h2>
+        <h2 className="section-title mt-2">
+          {hasSelectedTender ? `Submit bid to ${cloakRFP.selectedTenderLabel}` : "Submit encrypted bid"}
+        </h2>
         <p className="mt-3 text-sm leading-7 text-[var(--muted)]">
-          Bid values are encrypted as euint32 inputs for tender #0. Only handles and proofs are sent to the contract.
+          {hasSelectedTender
+            ? `Bid values are encrypted as euint32 inputs for ${cloakRFP.selectedTenderLabel}. Only handles and proofs are sent to the contract.`
+            : "Create or select a tender before submitting encrypted vendor terms."}
         </p>
       </div>
 
       <div className="mt-6 space-y-5">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <NumberInput label="Price" onChange={value => updateNumber("price", value)} value={form.price} />
+          <NumberInput
+            label="Price"
+            onChange={value => updateNumber("price", value)}
+            placeholder="Enter bid price"
+            value={form.price}
+          />
           <NumberInput
             label="Delivery days"
             onChange={value => updateNumber("deliveryDays", value)}
+            placeholder="Enter delivery days"
             value={form.deliveryDays}
           />
           <NumberInput
             label="Warranty months"
             onChange={value => updateNumber("warrantyMonths", value)}
+            placeholder="Enter warranty months"
             value={form.warrantyMonths}
           />
-          <NumberInput label="Quantity" onChange={value => updateNumber("quantity", value)} value={form.quantity} />
+          <NumberInput
+            label="Quantity"
+            onChange={value => updateNumber("quantity", value)}
+            placeholder="Enter quantity"
+            value={form.quantity}
+          />
         </div>
 
         <div className="bid-state-grid">
@@ -767,7 +913,11 @@ function VendorBidPanel({
             label="Contract"
             value={cloakRFP.hasContract ? "Ready" : "Missing"}
           />
-          <BidState label="Tender #0" active={!cloakRFP.tender} value={cloakRFP.tender ? "Loaded" : "Missing"} />
+          <BidState
+            label={hasSelectedTender ? cloakRFP.selectedTenderLabel : "Tender"}
+            active={!cloakRFP.tender}
+            value={cloakRFP.tender ? "Loaded" : "Missing"}
+          />
         </div>
 
         <button className="primary-action full" disabled={Boolean(bidDisabledReason)} type="submit">
@@ -790,32 +940,79 @@ function BidState({ active, label, value }: { active: boolean; label: string; va
   );
 }
 
+function BestVendorState({ tender }: { tender: NonNullable<ReturnType<typeof useCloakRFPWagmi>["tender"]> }) {
+  const state = tender.hasPendingVendor
+    ? {
+        eyebrow: "Best vendor state",
+        label: "Pending challenger",
+        detail: "Encrypted comparison needs resolution",
+        action: "Resolve pending comparison to update the best vendor state",
+        addressLabel: "Pending vendor",
+        address: tender.pendingVendor,
+        tone: "pending",
+      }
+    : tender.hasPublicBestVendor
+      ? {
+          eyebrow: "Best vendor state",
+          label: "Current best vendor",
+          detail: "Encrypted comparison resolved",
+          action: "Tender is ready for another vendor bid",
+          addressLabel: "Current leader",
+          address: tender.bestVendor,
+          tone: "resolved",
+        }
+      : {
+          eyebrow: "Best vendor state",
+          label: "No bids yet",
+          detail: "Submit the first encrypted bid",
+          action: "Encrypted bid values stay private while public state tracks progress",
+          addressLabel: "Current leader",
+          address: undefined,
+          tone: "empty",
+        };
+
+  return (
+    <div className={`best-vendor-state ${state.tone}`}>
+      <div className="best-vendor-copy">
+        <p className="micro-label">{state.eyebrow}</p>
+        <h3>{state.label}</h3>
+        <p>{state.detail}</p>
+      </div>
+      <div className="best-vendor-meta">
+        <span>{state.addressLabel}</span>
+        <strong title={state.address}>{displayAddress(state.address)}</strong>
+        <p>{state.action}</p>
+      </div>
+    </div>
+  );
+}
+
 function PrivacyStory() {
   return (
-    <section className="premium-card overflow-hidden p-0">
-      <div className="grid grid-cols-1 lg:grid-cols-[0.9fr_1.1fr]">
-        <div className="privacy-copy">
+    <section className="premium-card privacy-story">
+      <div className="privacy-copy">
+        <div>
           <p className="micro-label">Privacy boundary</p>
-          <h2 className="section-title mt-2">What the chain sees vs what stays encrypted</h2>
-          <p className="mt-4 text-sm leading-7 text-[var(--muted)]">
-            CloakRFP separates procurement transparency from commercial secrecy: rules stay public, bid economics stay
-            confidential.
-          </p>
+          <h2>What the chain sees vs what stays encrypted</h2>
         </div>
-        <div className="grid grid-cols-1 gap-px bg-[var(--border)] md:grid-cols-2">
-          <PrivacyColumn
-            items={["Buyer", "Rules", "Weights", "Winner state"]}
-            kicker="Visible state"
-            title="Public"
-            variant="gold"
-          />
-          <PrivacyColumn
-            items={["Vendor price", "Delivery days", "Warranty", "Quantity", "Losing bid details"]}
-            kicker="Encrypted inputs"
-            title="Private"
-            variant="cyan"
-          />
-        </div>
+        <p>
+          CloakRFP separates procurement transparency from commercial secrecy: rules stay public, bid economics stay
+          confidential.
+        </p>
+      </div>
+      <div className="privacy-compact-grid">
+        <PrivacyColumn
+          items={["Tender rules", "Buyer/vendor addresses", "Transaction activity", "Current best vendor address"]}
+          kicker="Visible state"
+          title="Public"
+          variant="gold"
+        />
+        <PrivacyColumn
+          items={["Price", "Delivery days", "Warranty months", "Quantity", "Encrypted score"]}
+          kicker="Encrypted inputs"
+          title="Private / encrypted"
+          variant="cyan"
+        />
       </div>
     </section>
   );
@@ -837,8 +1034,8 @@ function PrivacyColumn({
       <p className={`micro-label ${variant === "gold" ? "text-[var(--accent-gold)]" : "text-[var(--accent-cyan)]"}`}>
         {kicker}
       </p>
-      <h3 className="mt-2 text-3xl font-black text-[var(--heading)]">{title}</h3>
-      <ul className="mt-6 space-y-3">
+      <h3>{title}</h3>
+      <ul>
         {items.map(item => (
           <li className="privacy-item" key={item}>
             <span className={`privacy-marker ${variant}`} />
@@ -883,7 +1080,17 @@ function WeightCard({ label, value }: { label: string; value: number }) {
   );
 }
 
-function NumberInput({ label, value, onChange }: { label: string; value: number; onChange: (value: string) => void }) {
+function NumberInput({
+  label,
+  onChange,
+  placeholder,
+  value,
+}: {
+  label: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  value: string;
+}) {
   const id = label.toLowerCase().replaceAll(" ", "-");
   return (
     <div>
@@ -893,10 +1100,12 @@ function NumberInput({ label, value, onChange }: { label: string; value: number;
       <input
         className="premium-input"
         id={id}
-        max={4294967295}
-        min={0}
+        inputMode="numeric"
         onChange={event => onChange(event.target.value)}
-        type="number"
+        pattern="[0-9]*"
+        placeholder={placeholder}
+        required
+        type="text"
         value={value}
       />
     </div>
@@ -1462,57 +1671,48 @@ function ThemeStyles() {
         color: #2ecb90;
       }
 
+      .tender-chip {
+        display: inline-flex;
+        min-height: 2.75rem;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--panel-soft);
+        padding: 0.72rem 1rem;
+        color: var(--heading);
+        font-size: 0.82rem;
+        font-weight: 900;
+        transition:
+          transform 180ms ease,
+          border-color 180ms ease,
+          background 180ms ease,
+          box-shadow 180ms ease;
+      }
+
+      .tender-chip:hover:not(:disabled),
+      .tender-chip:focus-visible {
+        border-color: color-mix(in srgb, var(--accent-cyan) 42%, transparent);
+        box-shadow: 0 14px 34px rgb(0 0 0 / 0.14);
+        transform: translateY(-1px);
+        outline: none;
+      }
+
+      .tender-chip.selected {
+        border-color: color-mix(in srgb, var(--accent-gold) 56%, transparent);
+        background:
+          linear-gradient(135deg, color-mix(in srgb, var(--accent-gold-soft) 72%, transparent), transparent),
+          var(--panel-strong);
+        color: var(--heading);
+      }
+
+      .tender-chip:disabled {
+        cursor: default;
+      }
+
       .info-card,
       .weight-card {
         padding: 1rem;
-      }
-
-      .demo-flow-card {
-        border: 1px solid var(--border);
-        border-radius: 26px;
-        background:
-          linear-gradient(145deg, color-mix(in srgb, var(--accent-cyan-soft) 34%, transparent), transparent 56%),
-          linear-gradient(180deg, rgb(255 255 255 / 0.035), transparent), var(--panel);
-        padding: 1.25rem;
-        box-shadow: var(--card-shadow);
-      }
-
-      .demo-flow-list {
-        margin-top: 1rem;
-        display: grid;
-        gap: 0.65rem;
-      }
-
-      .demo-flow-list li {
-        display: grid;
-        grid-template-columns: 2rem minmax(0, 1fr);
-        align-items: center;
-        gap: 0.75rem;
-        border: 1px solid color-mix(in srgb, var(--accent-cyan) 18%, transparent);
-        border-radius: 18px;
-        background: linear-gradient(180deg, rgb(255 255 255 / 0.024), transparent), var(--panel-soft);
-        padding: 0.72rem 0.82rem;
-        color: var(--heading);
-        font-size: 0.88rem;
-        font-weight: 800;
-        line-height: 1.35;
-      }
-
-      .demo-flow-list span {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 2rem;
-        height: 2rem;
-        border-radius: 999px;
-        background: color-mix(in srgb, var(--accent-cyan-soft) 82%, var(--panel-soft));
-        color: var(--accent-cyan);
-        font-size: 0.78rem;
-        font-weight: 950;
-      }
-
-      .demo-flow-list p {
-        min-width: 0;
       }
 
       .weight-card {
@@ -1580,10 +1780,82 @@ function ThemeStyles() {
         gap: 0.75rem;
       }
 
+      .best-vendor-state {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 1rem;
+        border: 1px solid var(--border);
+        border-radius: 22px;
+        background: linear-gradient(180deg, rgb(255 255 255 / 0.026), transparent), var(--panel-soft);
+        padding: 1rem;
+      }
+
+      .best-vendor-state.resolved {
+        border-color: rgb(46 203 144 / 0.32);
+        background: linear-gradient(135deg, rgb(46 203 144 / 0.1), transparent 62%), var(--panel-soft);
+      }
+
+      .best-vendor-state.pending {
+        border-color: color-mix(in srgb, var(--accent-gold) 38%, transparent);
+        background:
+          linear-gradient(135deg, color-mix(in srgb, var(--accent-gold-soft) 86%, transparent), transparent 62%),
+          var(--panel-soft);
+      }
+
+      .best-vendor-copy h3 {
+        margin: 0.45rem 0 0;
+        color: var(--heading);
+        font-size: 1.35rem;
+        font-weight: 950;
+        letter-spacing: -0.035em;
+      }
+
+      .best-vendor-copy p:not(.micro-label),
+      .best-vendor-meta p {
+        margin: 0.45rem 0 0;
+        color: var(--muted);
+        font-size: 0.86rem;
+        line-height: 1.55;
+      }
+
+      .best-vendor-meta {
+        min-width: 0;
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        background: color-mix(in srgb, var(--panel-strong) 72%, transparent);
+        padding: 0.9rem;
+      }
+
+      .best-vendor-meta span {
+        display: block;
+        color: var(--muted);
+        font-size: 0.68rem;
+        font-weight: 850;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+
+      .best-vendor-meta strong {
+        display: block;
+        margin-top: 0.45rem;
+        overflow: hidden;
+        color: var(--heading);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        font-size: 0.92rem;
+        font-weight: 900;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
       @media (min-width: 768px) {
         .resolve-panel {
           grid-template-columns: minmax(0, 1fr) minmax(220px, 0.42fr);
           align-items: start;
+        }
+
+        .best-vendor-state {
+          grid-template-columns: minmax(0, 1fr) minmax(220px, 0.38fr);
+          align-items: stretch;
         }
       }
 
@@ -1669,30 +1941,78 @@ function ThemeStyles() {
         color: var(--heading);
       }
 
-      .privacy-copy,
-      .privacy-column {
-        padding: clamp(1.5rem, 4vw, 2.25rem);
+      .privacy-story {
+        display: grid;
+        gap: 1rem;
+        padding: 1.1rem;
+      }
+
+      .privacy-copy {
+        display: grid;
+        gap: 0.8rem;
+      }
+
+      .privacy-copy h2 {
+        margin: 0.35rem 0 0;
+        color: var(--heading);
+        font-size: clamp(1.35rem, 2.2vw, 1.8rem);
+        font-weight: 950;
+        letter-spacing: -0.035em;
+        line-height: 1.05;
+      }
+
+      .privacy-copy p:not(.micro-label) {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.88rem;
+        line-height: 1.65;
+      }
+
+      .privacy-compact-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 0.8rem;
       }
 
       .privacy-column {
+        border: 1px solid var(--border);
+        border-radius: 18px;
         background: linear-gradient(180deg, rgb(255 255 255 / 0.026), transparent), var(--panel-soft);
+        padding: 1rem;
+      }
+
+      .privacy-column h3 {
+        margin: 0.35rem 0 0;
+        color: var(--heading);
+        font-size: 1.08rem;
+        font-weight: 950;
+        letter-spacing: -0.02em;
+      }
+
+      .privacy-column ul {
+        margin-top: 0.85rem;
+        display: grid;
+        gap: 0.5rem;
       }
 
       .privacy-item {
         display: flex;
         align-items: center;
-        gap: 0.75rem;
+        gap: 0.58rem;
         border: 1px solid var(--border);
-        border-radius: 16px;
-        background: linear-gradient(180deg, rgb(255 255 255 / 0.02), transparent), var(--panel);
-        padding: 0.8rem 0.9rem;
+        border-radius: 12px;
+        background: linear-gradient(180deg, rgb(255 255 255 / 0.018), transparent), var(--panel);
+        padding: 0.5rem 0.62rem;
         color: var(--heading);
+        font-size: 0.82rem;
         font-weight: 750;
+        line-height: 1.35;
       }
 
       .privacy-marker {
-        width: 0.58rem;
-        height: 0.58rem;
+        width: 0.46rem;
+        height: 0.46rem;
+        flex: 0 0 auto;
         border-radius: 999px;
       }
 
@@ -1804,6 +2124,10 @@ function ThemeStyles() {
           grid-template-columns: 1fr;
         }
 
+        .privacy-story {
+          padding: 1rem;
+        }
+
         .flow-stack {
           position: relative;
           bottom: auto;
@@ -1813,6 +2137,17 @@ function ThemeStyles() {
         .flow-node {
           margin-left: 0;
           width: 100%;
+        }
+      }
+
+      @media (min-width: 900px) {
+        .privacy-story {
+          grid-template-columns: minmax(240px, 0.56fr) minmax(0, 1fr);
+          align-items: start;
+        }
+
+        .privacy-compact-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
         }
       }
 

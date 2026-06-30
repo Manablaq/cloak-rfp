@@ -59,6 +59,42 @@ contract CloakRFPTest is FhevmTest {
         assertEq(pendingVendor, address(0));
     }
 
+    function test_createMultipleTendersAndReadEachTender() public {
+        CloakRFP.ScoringWeights memory firstWeights =
+            CloakRFP.ScoringWeights({price: 10, deliveryDays: 3, warrantyMonths: 1, quantity: 2});
+        CloakRFP.ScoringWeights memory secondWeights =
+            CloakRFP.ScoringWeights({price: 2, deliveryDays: 8, warrantyMonths: 0, quantity: 1});
+
+        vm.prank(buyer);
+        uint256 firstTenderId = cloakRFP.createTender("ipfs://rfp-1", firstWeights);
+
+        vm.prank(carol);
+        uint256 secondTenderId = cloakRFP.createTender("ipfs://rfp-2", secondWeights);
+
+        assertEq(firstTenderId, 0);
+        assertEq(secondTenderId, 1);
+        assertEq(cloakRFP.nextTenderId(), 2);
+
+        (address firstBuyer, string memory firstMetadata, CloakRFP.ScoringWeights memory storedFirstWeights,,,,) =
+            cloakRFP.getTender(firstTenderId);
+        (address secondBuyer, string memory secondMetadata, CloakRFP.ScoringWeights memory storedSecondWeights,,,,) =
+            cloakRFP.getTender(secondTenderId);
+
+        assertEq(firstBuyer, buyer);
+        assertEq(firstMetadata, "ipfs://rfp-1");
+        assertEq(storedFirstWeights.price, 10);
+        assertEq(storedFirstWeights.deliveryDays, 3);
+        assertEq(storedFirstWeights.warrantyMonths, 1);
+        assertEq(storedFirstWeights.quantity, 2);
+
+        assertEq(secondBuyer, carol);
+        assertEq(secondMetadata, "ipfs://rfp-2");
+        assertEq(storedSecondWeights.price, 2);
+        assertEq(storedSecondWeights.deliveryDays, 8);
+        assertEq(storedSecondWeights.warrantyMonths, 0);
+        assertEq(storedSecondWeights.quantity, 1);
+    }
+
     function test_submitEncryptedBidScoresAndSetsFirstBestVendor() public {
         uint256 tenderId = _createTender();
 
@@ -68,6 +104,36 @@ contract CloakRFPTest is FhevmTest {
         assertEq(bestVendor, alice);
         assertEq(decrypt(bestScore), 165);
         assertEq(decrypt(cloakRFP.getBidScore(tenderId, alice)), 165);
+    }
+
+    function test_submitBidAndResolvePendingComparisonForSelectedTender() public {
+        uint256 firstTenderId = _createTender();
+        uint256 secondTenderId = _createTenderWithWeights(
+            "ipfs://rfp-selected", CloakRFP.ScoringWeights({price: 2, deliveryDays: 10, warrantyMonths: 1, quantity: 0})
+        );
+
+        _submitBid(firstTenderId, alice, 100, 5, 12, 20);
+        _submitBid(secondTenderId, alice, 100, 5, 12, 20);
+        _submitBid(secondTenderId, brian, 80, 3, 12, 20);
+
+        (,,,, address firstBestVendor, euint128 firstBestScore, address firstPendingVendor) =
+            cloakRFP.getTender(firstTenderId);
+        assertEq(firstBestVendor, alice);
+        assertEq(decrypt(firstBestScore), 165);
+        assertEq(firstPendingVendor, address(0));
+
+        (,,,, address secondBestVendorBefore,, address secondPendingVendor) = cloakRFP.getTender(secondTenderId);
+        assertEq(secondBestVendorBefore, alice);
+        assertEq(secondPendingVendor, brian);
+        assertTrue(decrypt(cloakRFP.getPendingComparison(secondTenderId, brian)));
+
+        _resolvePending(secondTenderId, brian);
+
+        (,,,, address secondBestVendor, euint128 secondBestScore, address secondPendingAfter) =
+            cloakRFP.getTender(secondTenderId);
+        assertEq(secondBestVendor, brian);
+        assertEq(decrypt(secondBestScore), 202);
+        assertEq(secondPendingAfter, address(0));
     }
 
     function test_resolvePendingBestUpdatesWhenLowerScoreWins() public {
@@ -173,12 +239,46 @@ contract CloakRFPTest is FhevmTest {
         assertEq(clearScore, 165);
     }
 
+    function test_tenderNotFoundStillReverts() public {
+        vm.expectRevert(abi.encodeWithSelector(CloakRFP.TenderNotFound.selector, 0));
+        cloakRFP.getTender(0);
+
+        uint256 tenderId = _createTender();
+        assertEq(tenderId, 0);
+
+        vm.expectRevert(abi.encodeWithSelector(CloakRFP.TenderNotFound.selector, 1));
+        cloakRFP.getTender(1);
+
+        vm.expectRevert(abi.encodeWithSelector(CloakRFP.TenderNotFound.selector, 1));
+        vm.prank(alice);
+        cloakRFP.submitBid(
+            1,
+            CloakRFP.EncryptedBid({
+                price: externalEuint32.wrap(bytes32(0)),
+                deliveryDays: externalEuint32.wrap(bytes32(0)),
+                warrantyMonths: externalEuint32.wrap(bytes32(0)),
+                quantity: externalEuint32.wrap(bytes32(0)),
+                priceProof: "",
+                deliveryDaysProof: "",
+                warrantyMonthsProof: "",
+                quantityProof: ""
+            })
+        );
+    }
+
     function _createTender() internal returns (uint256 tenderId) {
         CloakRFP.ScoringWeights memory weights =
             CloakRFP.ScoringWeights({price: 1, deliveryDays: 5, warrantyMonths: 0, quantity: 2});
 
+        tenderId = _createTenderWithWeights("ipfs://rfp-1", weights);
+    }
+
+    function _createTenderWithWeights(string memory metadataURI, CloakRFP.ScoringWeights memory weights)
+        internal
+        returns (uint256 tenderId)
+    {
         vm.prank(buyer);
-        tenderId = cloakRFP.createTender("ipfs://rfp-1", weights);
+        tenderId = cloakRFP.createTender(metadataURI, weights);
     }
 
     function _submitBid(

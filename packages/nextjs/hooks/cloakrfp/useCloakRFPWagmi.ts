@@ -1,8 +1,15 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useEncrypt, usePublicDecrypt } from "@zama-fhe/react-sdk";
-import { BaseError, ContractFunctionRevertedError, bytesToHex, decodeAbiParameters, isAddressEqual } from "viem";
+import {
+  BaseError,
+  ContractFunctionRevertedError,
+  bytesToHex,
+  decodeAbiParameters,
+  isAddressEqual,
+  parseEventLogs,
+} from "viem";
 import { useAccount, useChainId, useReadContract, useWriteContract } from "wagmi";
 import { readContract } from "wagmi/actions";
 import { waitForTransactionReceipt } from "wagmi/actions";
@@ -45,7 +52,6 @@ export type VendorBidForm = {
 type BidStatus = "idle" | "encrypting" | "awaiting-wallet" | "submitting" | "confirmed" | "error";
 type ResolveStatus = "idle" | "ready" | "decrypting" | "awaiting-wallet" | "resolving" | "confirmed" | "error";
 
-const TENDER_ID = 0n;
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
 
 const isTenderNotFound = (error: unknown) => {
@@ -92,16 +98,16 @@ const toHexBytes = (value: unknown, label: string) => {
   throw new Error(`${label} was not returned as hex bytes`);
 };
 
-const formatBidError = (error: unknown) => {
+const formatBidError = (error: unknown, tenderLabel: string) => {
   const message = formatError(error);
   if (message.includes("User rejected") || message.includes("rejected the request")) {
     return "Wallet confirmation was cancelled.";
   }
   if (message.includes("BidAlreadySubmitted")) {
-    return "This wallet has already submitted a bid for tender #0.";
+    return `This wallet has already submitted a bid for ${tenderLabel}.`;
   }
   if (message.includes("TenderNotFound")) {
-    return "Tender #0 is not available yet.";
+    return `${tenderLabel} is not available yet.`;
   }
   if (message.includes("PendingBestResolutionRequired")) {
     return "A pending encrypted comparison must be resolved before another bid can be accepted.";
@@ -145,14 +151,14 @@ export const useCloakRFPWagmi = () => {
   const [isManualRefreshing, setIsManualRefreshing] = useState(false);
   const [isSubmittingBid, setIsSubmittingBid] = useState(false);
   const [isResolvingPendingBest, setIsResolvingPendingBest] = useState(false);
+  const [selectedTenderId, setSelectedTenderId] = useState<bigint>(0n);
 
   const hasContract = Boolean(cloakRFP?.address && cloakRFP?.abi);
 
-  const tenderRead = useReadContract({
+  const tenderCountRead = useReadContract({
     address: hasContract ? cloakRFP!.address : undefined,
     abi: hasContract ? cloakRFP!.abi : undefined,
-    functionName: "getTender",
-    args: [TENDER_ID],
+    functionName: "nextTenderId",
     query: {
       enabled: hasContract,
       refetchOnWindowFocus: false,
@@ -160,9 +166,42 @@ export const useCloakRFPWagmi = () => {
     },
   });
 
+  const tenderRead = useReadContract({
+    address: hasContract ? cloakRFP!.address : undefined,
+    abi: hasContract ? cloakRFP!.abi : undefined,
+    functionName: "getTender",
+    args: [selectedTenderId],
+    query: {
+      enabled: hasContract,
+      refetchOnWindowFocus: false,
+      retry: false,
+    },
+  });
+
+  const tenderCount = (tenderCountRead.data as bigint | undefined) ?? 0n;
+  const selectedTenderLabel =
+    tenderCountRead.data === undefined || tenderCountRead.data === 0n
+      ? "No tender selected"
+      : `Tender #${selectedTenderId.toString()}`;
   const tender = tenderRead.data as TenderResult | undefined;
   const tenderMissing = isTenderNotFound(tenderRead.error);
-  const readError = tenderRead.error && !tenderMissing ? formatError(tenderRead.error) : "";
+  const countReadError = tenderCountRead.error ? formatError(tenderCountRead.error) : "";
+  const tenderReadError = tenderRead.error && !tenderMissing ? formatError(tenderRead.error) : "";
+  const readError = countReadError || tenderReadError;
+
+  useEffect(() => {
+    if (tenderCount === 0n || selectedTenderId < tenderCount) return;
+    setSelectedTenderId(tenderCount - 1n);
+  }, [selectedTenderId, tenderCount]);
+
+  const selectTender = useCallback((tenderId: bigint) => {
+    setBidMessage("");
+    setBidStatus("idle");
+    setResolveMessage("");
+    setResolveStatus("idle");
+    setMessage(`Selected Tender #${tenderId.toString()}.`);
+    setSelectedTenderId(tenderId);
+  }, []);
 
   const refreshTenderForSource = useCallback(
     async (source: "create" | "manual") => {
@@ -171,34 +210,41 @@ export const useCloakRFPWagmi = () => {
         setIsManualRefreshing(true);
       }
       try {
-        const result = await tenderRead.refetch();
-        if (result.error && !isTenderNotFound(result.error)) {
-          const errorMessage = formatError(result.error);
+        const [countResult, tenderResult] = await Promise.all([tenderCountRead.refetch(), tenderRead.refetch()]);
+        const countError = countResult.error ? formatError(countResult.error) : "";
+        if (countError) {
+          setMessage(countError);
+          return { ok: false, error: countError };
+        }
+        if (tenderResult.error && !isTenderNotFound(tenderResult.error)) {
+          const errorMessage = formatError(tenderResult.error);
           setMessage(errorMessage);
           return { ok: false, error: errorMessage };
         }
-        if (result.error && isTenderNotFound(result.error)) {
+        if (tenderResult.error && isTenderNotFound(tenderResult.error)) {
           const errorMessage =
-            source === "create"
-              ? "Tender confirmed, but tender 0 is still not available."
-              : "Tender #0 has not been created yet.";
+            countResult.data === 0n
+              ? "No tenders have been created yet."
+              : source === "create"
+                ? `Tender confirmed, but ${selectedTenderLabel} is still not available.`
+                : `${selectedTenderLabel} has not been created yet.`;
           setMessage(errorMessage);
           return { ok: false, error: errorMessage };
         }
-        if (source === "manual") setMessage("Tender state refreshed.");
+        if (source === "manual") setMessage(`${selectedTenderLabel} state refreshed.`);
         return { ok: true };
       } finally {
         if (source === "manual") setIsManualRefreshing(false);
       }
     },
-    [tenderRead],
+    [selectedTenderLabel, tenderCountRead, tenderRead],
   );
 
   const refreshTender = useCallback(() => refreshTenderForSource("manual"), [refreshTenderForSource]);
 
   const createTender = useCallback(
     async (form: CreateTenderForm) => {
-      if (!hasContract || !cloakRFP || !isConnected) return;
+      if (!hasContract || !cloakRFP || !isConnected || !address) return;
       setMessage("Creating tender...");
       try {
         const hash = await writeContractAsync({
@@ -217,26 +263,49 @@ export const useCloakRFPWagmi = () => {
         });
         setMessage("Tender transaction submitted. Waiting for confirmation...");
         setIsWaitingForReceipt(true);
-        await waitForTransactionReceipt(wagmiConfig, { hash });
+        const receipt = await waitForTransactionReceipt(wagmiConfig, { hash });
         setMessage("Tender confirmed. Refreshing public data...");
-        const refresh = await refreshTenderForSource("create");
-        if (refresh.ok) setMessage("Tender confirmed and loaded.");
+
+        let createdTenderId: bigint | undefined;
+        try {
+          const createdEvents = parseEventLogs({
+            abi: cloakRFP.abi,
+            eventName: "TenderCreated",
+            logs: receipt.logs.filter(log => isAddressEqual(log.address, cloakRFP.address)),
+          });
+          createdTenderId = createdEvents.find(event => isAddressEqual(event.args.buyer, address))?.args.tenderId;
+        } catch {
+          createdTenderId = undefined;
+        }
+
+        await tenderCountRead.refetch();
+
+        if (createdTenderId === undefined) {
+          setMessage("Tender confirmed, but the created tender ID could not be read. Refresh tender list.");
+          return;
+        }
+
+        if (createdTenderId === selectedTenderId) await tenderRead.refetch();
+        setSelectedTenderId(createdTenderId);
+        setMessage(`Tender #${createdTenderId.toString()} confirmed and selected.`);
+        return createdTenderId;
       } catch (error) {
         setMessage(`createTender failed: ${formatError(error)}`);
+        return undefined;
       } finally {
         setIsWaitingForReceipt(false);
       }
     },
-    [cloakRFP, hasContract, isConnected, refreshTenderForSource, writeContractAsync],
+    [address, cloakRFP, hasContract, isConnected, selectedTenderId, tenderCountRead, tenderRead, writeContractAsync],
   );
 
   const submitBid = useCallback(
     async (form: VendorBidForm) => {
-      if (!hasContract || !cloakRFP || !isConnected || !address || !tender || tenderMissing) return;
+      if (!hasContract || !cloakRFP || !isConnected || !address || !tender || tenderMissing) return false;
       if (tender[6] && !isAddressEqual(tender[6], ZERO_ADDRESS)) {
         setBidStatus("error");
         setBidMessage("A pending encrypted comparison must be resolved before another bid can be submitted.");
-        return;
+        return false;
       }
       setIsSubmittingBid(true);
       setBidStatus("encrypting");
@@ -270,7 +339,7 @@ export const useCloakRFPWagmi = () => {
           abi: cloakRFP.abi,
           functionName: "submitBid",
           args: [
-            TENDER_ID,
+            selectedTenderId,
             {
               price: price.handle,
               deliveryDays: deliveryDays.handle,
@@ -289,12 +358,14 @@ export const useCloakRFPWagmi = () => {
         setBidMessage("Submitting encrypted bid. Waiting for confirmation...");
         await waitForTransactionReceipt(wagmiConfig, { hash });
         setBidStatus("confirmed");
-        setBidMessage("Bid confirmed. Refreshing tender #0...");
+        setBidMessage(`Bid confirmed. Refreshing ${selectedTenderLabel}...`);
         const refresh = await refreshTenderForSource("create");
-        if (refresh.ok) setBidMessage("Encrypted bid confirmed and tender #0 refreshed.");
+        if (refresh.ok) setBidMessage(`Encrypted bid confirmed and ${selectedTenderLabel} refreshed.`);
+        return true;
       } catch (error) {
         setBidStatus("error");
-        setBidMessage(formatBidError(error));
+        setBidMessage(formatBidError(error, selectedTenderLabel));
+        return false;
       } finally {
         setIsSubmittingBid(false);
       }
@@ -306,6 +377,8 @@ export const useCloakRFPWagmi = () => {
       hasContract,
       isConnected,
       refreshTenderForSource,
+      selectedTenderId,
+      selectedTenderLabel,
       tender,
       tenderMissing,
       writeContractAsync,
@@ -329,7 +402,7 @@ export const useCloakRFPWagmi = () => {
         address: cloakRFP.address,
         abi: cloakRFP.abi,
         functionName: "getPendingComparison",
-        args: [TENDER_ID, tender[6]],
+        args: [selectedTenderId, tender[6]],
       })) as `0x${string}`;
 
       const decrypted = await publicDecrypt.mutateAsync([pendingComparisonHandle]);
@@ -353,7 +426,7 @@ export const useCloakRFPWagmi = () => {
         address: cloakRFP.address,
         abi: cloakRFP.abi,
         functionName: "resolvePendingBest",
-        args: [TENDER_ID, cleartext, decryptionProof],
+        args: [selectedTenderId, cleartext, decryptionProof],
         gas: 15_000_000n,
       });
 
@@ -361,9 +434,9 @@ export const useCloakRFPWagmi = () => {
       setResolveMessage("Resolving encrypted comparison. Waiting for confirmation...");
       await waitForTransactionReceipt(wagmiConfig, { hash });
       setResolveStatus("confirmed");
-      setResolveMessage("Comparison resolved. Refreshing tender #0...");
+      setResolveMessage(`Comparison resolved. Refreshing ${selectedTenderLabel}...`);
       const refresh = await refreshTenderForSource("create");
-      if (refresh.ok) setResolveMessage("Comparison resolved and tender #0 refreshed.");
+      if (refresh.ok) setResolveMessage(`Comparison resolved and ${selectedTenderLabel} refreshed.`);
     } catch (error) {
       console.error("CloakRFP resolvePendingBest failed", error);
       setResolveStatus("error");
@@ -377,6 +450,8 @@ export const useCloakRFPWagmi = () => {
     isConnected,
     publicDecrypt,
     refreshTenderForSource,
+    selectedTenderId,
+    selectedTenderLabel,
     tender,
     tenderMissing,
     writeContractAsync,
@@ -391,6 +466,7 @@ export const useCloakRFPWagmi = () => {
     hasContract,
     isConnected,
     isLoadingTender: tenderRead.isFetching || isManualRefreshing,
+    isLoadingTenderCount: tenderCountRead.isFetching,
     isResolvingPendingBest,
     isSubmittingBid,
     isWriting: isWriting || isWaitingForReceipt || isResolvingPendingBest,
@@ -405,6 +481,11 @@ export const useCloakRFPWagmi = () => {
         ? "ready"
         : resolveStatus,
     submitBid,
+    selectTender,
+    selectedTenderId,
+    selectedTenderLabel,
+    tenderCount,
+    tenderIds: Array.from({ length: Number(tenderCount) }, (_, index) => BigInt(index)),
     tenderMissing,
     tender:
       tender && !tenderMissing

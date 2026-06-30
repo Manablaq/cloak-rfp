@@ -8,7 +8,514 @@
 import { CloakRFP as CloakRFP_LOCAL } from "./CloakRFP.local";
 import type { ContractDeployment } from "~~/utils/contract";
 
-const REMOTE = {} as const;
+const REMOTE = {
+  11155111: {
+    address: "0xDAf8F2cd955C146561ec7bCE802aabF227fda931",
+    abi: [
+      {
+        type: "function",
+        name: "confidentialProtocolId",
+        inputs: [],
+        outputs: [
+          {
+            name: "",
+            type: "uint256",
+            internalType: "uint256",
+          },
+        ],
+        stateMutability: "view",
+      },
+      {
+        type: "function",
+        name: "createTender",
+        inputs: [
+          {
+            name: "metadataURI",
+            type: "string",
+            internalType: "string",
+          },
+          {
+            name: "weights",
+            type: "tuple",
+            internalType: "struct CloakRFP.ScoringWeights",
+            components: [
+              {
+                name: "price",
+                type: "uint32",
+                internalType: "uint32",
+              },
+              {
+                name: "deliveryDays",
+                type: "uint32",
+                internalType: "uint32",
+              },
+              {
+                name: "warrantyMonths",
+                type: "uint32",
+                internalType: "uint32",
+              },
+              {
+                name: "quantity",
+                type: "uint32",
+                internalType: "uint32",
+              },
+            ],
+          },
+        ],
+        outputs: [
+          {
+            name: "tenderId",
+            type: "uint256",
+            internalType: "uint256",
+          },
+        ],
+        stateMutability: "nonpayable",
+      },
+      {
+        type: "function",
+        name: "getBidScore",
+        inputs: [
+          {
+            name: "tenderId",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "vendor",
+            type: "address",
+            internalType: "address",
+          },
+        ],
+        outputs: [
+          {
+            name: "",
+            type: "bytes32",
+            internalType: "euint128",
+          },
+        ],
+        stateMutability: "view",
+      },
+      {
+        type: "function",
+        name: "getPendingComparison",
+        inputs: [
+          {
+            name: "tenderId",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "vendor",
+            type: "address",
+            internalType: "address",
+          },
+        ],
+        outputs: [
+          {
+            name: "",
+            type: "bytes32",
+            internalType: "ebool",
+          },
+        ],
+        stateMutability: "view",
+      },
+      {
+        type: "function",
+        name: "getTender",
+        inputs: [
+          {
+            name: "tenderId",
+            type: "uint256",
+            internalType: "uint256",
+          },
+        ],
+        outputs: [
+          {
+            name: "buyer",
+            type: "address",
+            internalType: "address",
+          },
+          {
+            name: "metadataURI",
+            type: "string",
+            internalType: "string",
+          },
+          {
+            name: "weights",
+            type: "tuple",
+            internalType: "struct CloakRFP.ScoringWeights",
+            components: [
+              {
+                name: "price",
+                type: "uint32",
+                internalType: "uint32",
+              },
+              {
+                name: "deliveryDays",
+                type: "uint32",
+                internalType: "uint32",
+              },
+              {
+                name: "warrantyMonths",
+                type: "uint32",
+                internalType: "uint32",
+              },
+              {
+                name: "quantity",
+                type: "uint32",
+                internalType: "uint32",
+              },
+            ],
+          },
+          {
+            name: "hasBest",
+            type: "bool",
+            internalType: "bool",
+          },
+          {
+            name: "bestVendor",
+            type: "address",
+            internalType: "address",
+          },
+          {
+            name: "bestScore",
+            type: "bytes32",
+            internalType: "euint128",
+          },
+          {
+            name: "pendingVendor",
+            type: "address",
+            internalType: "address",
+          },
+        ],
+        stateMutability: "view",
+      },
+      {
+        type: "function",
+        name: "isBestScoreAllowed",
+        inputs: [
+          {
+            name: "tenderId",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "account",
+            type: "address",
+            internalType: "address",
+          },
+        ],
+        outputs: [
+          {
+            name: "",
+            type: "bool",
+            internalType: "bool",
+          },
+        ],
+        stateMutability: "view",
+      },
+      {
+        type: "function",
+        name: "isBidScoreAllowed",
+        inputs: [
+          {
+            name: "tenderId",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "vendor",
+            type: "address",
+            internalType: "address",
+          },
+          {
+            name: "account",
+            type: "address",
+            internalType: "address",
+          },
+        ],
+        outputs: [
+          {
+            name: "",
+            type: "bool",
+            internalType: "bool",
+          },
+        ],
+        stateMutability: "view",
+      },
+      {
+        type: "function",
+        name: "nextTenderId",
+        inputs: [],
+        outputs: [
+          {
+            name: "",
+            type: "uint256",
+            internalType: "uint256",
+          },
+        ],
+        stateMutability: "view",
+      },
+      {
+        type: "function",
+        name: "resolvePendingBest",
+        inputs: [
+          {
+            name: "tenderId",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "cleartext",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "decryptionProof",
+            type: "bytes",
+            internalType: "bytes",
+          },
+        ],
+        outputs: [],
+        stateMutability: "nonpayable",
+      },
+      {
+        type: "function",
+        name: "submitBid",
+        inputs: [
+          {
+            name: "tenderId",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "encryptedBid",
+            type: "tuple",
+            internalType: "struct CloakRFP.EncryptedBid",
+            components: [
+              {
+                name: "price",
+                type: "bytes32",
+                internalType: "externalEuint32",
+              },
+              {
+                name: "deliveryDays",
+                type: "bytes32",
+                internalType: "externalEuint32",
+              },
+              {
+                name: "warrantyMonths",
+                type: "bytes32",
+                internalType: "externalEuint32",
+              },
+              {
+                name: "quantity",
+                type: "bytes32",
+                internalType: "externalEuint32",
+              },
+              {
+                name: "priceProof",
+                type: "bytes",
+                internalType: "bytes",
+              },
+              {
+                name: "deliveryDaysProof",
+                type: "bytes",
+                internalType: "bytes",
+              },
+              {
+                name: "warrantyMonthsProof",
+                type: "bytes",
+                internalType: "bytes",
+              },
+              {
+                name: "quantityProof",
+                type: "bytes",
+                internalType: "bytes",
+              },
+            ],
+          },
+        ],
+        outputs: [],
+        stateMutability: "nonpayable",
+      },
+      {
+        type: "event",
+        name: "BidSubmitted",
+        inputs: [
+          {
+            name: "tenderId",
+            type: "uint256",
+            indexed: true,
+            internalType: "uint256",
+          },
+          {
+            name: "vendor",
+            type: "address",
+            indexed: true,
+            internalType: "address",
+          },
+        ],
+        anonymous: false,
+      },
+      {
+        type: "event",
+        name: "PendingBestResolved",
+        inputs: [
+          {
+            name: "tenderId",
+            type: "uint256",
+            indexed: true,
+            internalType: "uint256",
+          },
+          {
+            name: "vendor",
+            type: "address",
+            indexed: true,
+            internalType: "address",
+          },
+          {
+            name: "isBetter",
+            type: "bool",
+            indexed: false,
+            internalType: "bool",
+          },
+        ],
+        anonymous: false,
+      },
+      {
+        type: "event",
+        name: "PublicDecryptionVerified",
+        inputs: [
+          {
+            name: "handlesList",
+            type: "bytes32[]",
+            indexed: false,
+            internalType: "bytes32[]",
+          },
+          {
+            name: "abiEncodedCleartexts",
+            type: "bytes",
+            indexed: false,
+            internalType: "bytes",
+          },
+        ],
+        anonymous: false,
+      },
+      {
+        type: "event",
+        name: "TenderCreated",
+        inputs: [
+          {
+            name: "tenderId",
+            type: "uint256",
+            indexed: true,
+            internalType: "uint256",
+          },
+          {
+            name: "buyer",
+            type: "address",
+            indexed: true,
+            internalType: "address",
+          },
+          {
+            name: "metadataURI",
+            type: "string",
+            indexed: false,
+            internalType: "string",
+          },
+        ],
+        anonymous: false,
+      },
+      {
+        type: "error",
+        name: "BidAlreadySubmitted",
+        inputs: [
+          {
+            name: "tenderId",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "vendor",
+            type: "address",
+            internalType: "address",
+          },
+        ],
+      },
+      {
+        type: "error",
+        name: "InvalidDecryptionResult",
+        inputs: [],
+      },
+      {
+        type: "error",
+        name: "InvalidKMSSignatures",
+        inputs: [],
+      },
+      {
+        type: "error",
+        name: "NoPendingBest",
+        inputs: [
+          {
+            name: "tenderId",
+            type: "uint256",
+            internalType: "uint256",
+          },
+        ],
+      },
+      {
+        type: "error",
+        name: "PendingBestResolutionRequired",
+        inputs: [
+          {
+            name: "tenderId",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "pendingVendor",
+            type: "address",
+            internalType: "address",
+          },
+        ],
+      },
+      {
+        type: "error",
+        name: "SenderNotAllowedToUseHandle",
+        inputs: [
+          {
+            name: "handle",
+            type: "bytes32",
+            internalType: "bytes32",
+          },
+          {
+            name: "sender",
+            type: "address",
+            internalType: "address",
+          },
+        ],
+      },
+      {
+        type: "error",
+        name: "TenderNotFound",
+        inputs: [
+          {
+            name: "tenderId",
+            type: "uint256",
+            internalType: "uint256",
+          },
+        ],
+      },
+      {
+        type: "error",
+        name: "ZamaProtocolUnsupported",
+        inputs: [],
+      },
+    ],
+    deployedOnBlock: 11174303,
+  },
+} as const;
 
 export const CloakRFP = {
   ...REMOTE,

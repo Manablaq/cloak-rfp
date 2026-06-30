@@ -1,119 +1,202 @@
-# FHEVM React Template
+# CloakRFP
 
-A minimal React + Foundry template for building FHEVM-enabled dApps. Ships with `FHECounter.sol` (a trivial encrypted counter) and a Next.js frontend that reads, writes, and decrypts its value.
+Confidential vendor bidding for public tenders, powered by Zama FHE.
 
-FHEVM (Fully Homomorphic Encryption Virtual Machine) lets smart contracts compute on encrypted data. Inputs, storage, and ciphertext handles stay private; only authorized callers can decrypt.
+## Pitch
 
-## Stack
+CloakRFP lets vendors submit encrypted commercial bids while a smart contract computes and compares bid scores without exposing the raw bid values on-chain.
 
-- **Contracts** — Foundry, Solidity 0.8.27, [forge-fhevm](https://github.com/zama-ai/forge-fhevm) for host contracts + testing helpers
-- **Frontend** — Next.js 15 (App Router), React 19, wagmi, viem, RainbowKit, Tailwind + daisyUI
-- **FHE SDK** — `@zama-fhe/sdk` + `@zama-fhe/react-sdk` v3; `RelayerCleartext` on localhost, `RelayerWeb` on Sepolia
+## Problem
 
-## Prerequisites
+Public procurement and competitive RFP workflows need transparency around rules, ownership, and final state, but vendors often do not want to reveal sensitive commercial terms such as price, delivery timing, warranty coverage, and supplied quantity. A fully public bidding contract leaks those values immediately. A fully private off-chain process weakens auditability and makes it harder to trust that every bid was evaluated with the same scoring rules.
 
-Node.js ≥ 20, pnpm, [Foundry](https://book.getfoundry.sh/getting-started/installation) (`forge` / `anvil` / `cast`), `jq`, MetaMask.
+## Solution
 
-## Quick start
+CloakRFP keeps tender metadata and scoring weights public, then accepts encrypted vendor bids. The contract computes a weighted score over encrypted bid fields and tracks the current best vendor. When a later vendor submits a bid, the contract creates an encrypted comparison against the current best score. That comparison can be publicly decrypted as a boolean so the contract can update the best vendor without revealing the bid values or scores.
+
+The current MVP is intentionally focused on a single demo tender: Tender #0.
+
+## How CloakRFP Uses Zama FHE
+
+- The frontend uses `@zama-fhe/react-sdk` to encrypt four bid fields as `euint32` inputs:
+  - `price`
+  - `deliveryDays`
+  - `warrantyMonths`
+  - `quantity`
+- The contract accepts those values as `externalEuint32` handles plus input proofs.
+- `CloakRFP.submitBid` converts the external encrypted inputs with `FHE.fromExternal`.
+- The contract computes an encrypted weighted score using FHE arithmetic.
+- The first bid becomes the initial best bid.
+- Later bids are compared with `FHE.lt(score, bestScore)`, producing an encrypted `ebool`.
+- The encrypted comparison is made publicly decryptable.
+- The frontend calls `usePublicDecrypt()` for the pending comparison handle, then calls `resolvePendingBest` with the clear boolean encoded as a scalar `uint256` plus the Zama decryption proof.
+- The contract verifies the public decrypt proof with `FHE.checkSignatures` before updating the best vendor.
+
+## Public vs Private
+
+Public:
+
+- Tender ID and buyer address.
+- Tender metadata URI.
+- Public scoring weights.
+- Vendor addresses that submit bids.
+- Current best vendor address.
+- Pending vendor address.
+- Whether a pending encrypted comparison resolved to true or false.
+
+Private:
+
+- Vendor `price`.
+- Vendor `deliveryDays`.
+- Vendor `warrantyMonths`.
+- Vendor `quantity`.
+- Encrypted bid scores.
+- The numeric difference between bids.
+
+Local demo note: the local chain uses Zama's cleartext development stack for testing. It is useful for local development and demos, but it is not a privacy-preserving production deployment.
+
+## Current MVP Scope
+
+Implemented:
+
+- Tender #0 creation.
+- Public tender metadata and scoring weights.
+- Encrypted vendor bid submission.
+- Encrypted score computation.
+- Sequential multi-vendor bidding.
+- Pending encrypted comparison resolution.
+- Premium Next.js demo UI with wallet connection, refresh state, bid form, resolve action, and demo flow guidance.
+
+Not implemented yet:
+
+- Winner reveal UI.
+- Multi-tender browsing.
+- Production deployment configuration for a live public demo.
+- Security audit or production hardening.
+
+## Demo Flow
+
+1. Create Tender #0.
+2. Submit the first encrypted bid.
+3. Switch wallet and submit a second encrypted bid.
+4. Resolve the pending encrypted comparison.
+5. Repeat with another vendor.
+
+See [docs/demo-script.md](docs/demo-script.md) for a reviewer-friendly walkthrough.
+
+## Local Setup
+
+Prerequisites:
+
+- Node.js 20 or newer.
+- pnpm 10.x. The repo pins `pnpm@10.18.3`.
+- Foundry (`forge`, `anvil`, `cast`).
+- `jq`.
+- MetaMask or another browser wallet.
+
+Install dependencies:
 
 ```bash
-pnpm install            # node deps + husky + regenerate ABIs
-pnpm contracts:install  # forge soldeer install — required before `pnpm chain`
+pnpm install
 ```
 
-### Local
+Install Foundry/Soldeer contract dependencies if they are not already present:
 
 ```bash
-# Terminal 1 — anvil + FHEVM cleartext host + FHECounter
+pnpm contracts:install
+```
+
+Start the local chain and FHEVM development stack:
+
+```bash
 pnpm chain
+```
 
-# Terminal 2 — frontend (http://localhost:3000)
+In a second terminal, start the frontend:
+
+```bash
 pnpm start
 ```
 
-Add the local network to MetaMask: RPC `http://127.0.0.1:8545`, chain id `31337`. Import any anvil dev account (e.g. private key `0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80`, address `0xf39F…2266`, 10 000 ETH).
+Open the app at:
 
-To redeploy `FHECounter` without restarting anvil: `pnpm deploy:localhost`.
-
-### Sepolia
-
-```bash
-cp .env.example .env.local   # then fill in the three values below
+```text
+http://localhost:3000
 ```
 
-```bash
-DEPLOYER_PRIVATE_KEY=0x...                         # deployer funded with Sepolia ETH
-SEPOLIA_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/YOUR_KEY
-ETHERSCAN_API_KEY=...                              # optional, enables --verify
-```
-
-Add an Alchemy key to `packages/nextjs/.env.local`:
+## Commands
 
 ```bash
-NEXT_PUBLIC_ALCHEMY_API_KEY=YOUR_KEY
-```
-
-Deploy + run:
-
-```bash
-pnpm deploy:sepolia
+pnpm install
+pnpm contracts:install
+pnpm chain
 pnpm start
+pnpm contracts:test
+pnpm next:check-types
+pnpm next:lint
+NEXT_PUBLIC_ALCHEMY_API_KEY=dummy pnpm next:build
 ```
 
-## Scripts
+Additional useful commands:
 
-| Command                  | What it does                                                                                 |
-| ------------------------ | -------------------------------------------------------------------------------------------- |
-| `pnpm chain`             | Anvil + FHEVM cleartext host + `FHECounter` on port 8545                                     |
-| `pnpm deploy:localhost`  | Deploys `FHECounter` to local anvil, then regenerates frontend ABIs                          |
-| `pnpm deploy:sepolia`    | Deploys to Sepolia (reads `.env.local`), then regenerates frontend ABIs                      |
-| `pnpm contracts:install` | `forge soldeer install` — fetches forge-fhevm and other contract deps                        |
-| `pnpm contracts:build`   | `forge build` in `packages/foundry`                                                          |
-| `pnpm contracts:test`    | `forge test -vv` in `packages/foundry`                                                       |
-| `pnpm generate`          | Emits `packages/nextjs/contracts/<Name>.ts` + `<Name>.local.ts` from forge broadcasts + out/ |
-| `pnpm start`             | `next dev`                                                                                   |
-| `pnpm next:build`        | Production build of the frontend                                                             |
-| `pnpm next:check-types`  | TypeScript check on the frontend                                                             |
-| `pnpm lint`              | Lint the frontend                                                                            |
-| `pnpm format`            | Prettier over the whole repo (`format:check` for no-write)                                   |
-
-## Project structure
-
-```
-fhevm-react-template/
-├── scripts/                       # chain.sh, deploy-*.sh, generateTsAbis.ts
-├── packages/foundry/              # Solidity contracts
-│   ├── src/FHECounter.sol
-│   ├── script/DeployFHECounter.s.sol
-│   └── test/FHECounter.t.sol      # inherits forge-fhevm's FhevmTest
-└── packages/nextjs/               # Frontend
-    ├── components/DappWrapperWithProviders.tsx   # wires ZamaProvider + relayer
-    ├── hooks/fhecounter-example/useFHECounterWagmi.tsx
-    ├── contracts/
-    │   ├── FHECounter.ts          # non-local (Sepolia, …) — tracked
-    │   └── FHECounter.local.ts    # chainId 31337 overlay — gitignored
-    └── utils/contract.ts          # ContractDeployment + deploymentFor()
+```bash
+pnpm contracts:build
+pnpm deploy:localhost
+pnpm generate
 ```
 
-The per-contract `Name.ts` imports `Name.local.ts` and merges at module load, so consumer code is agnostic to which chain a deployment lives on. `postinstall` regenerates both on every `pnpm install`, including an empty stub sidecar on a fresh clone.
+`pnpm chain` starts Anvil on chain ID `31337`, deploys the local FHEVM development stack, deploys `FHECounter` and `CloakRFP`, and regenerates frontend ABI/address files.
 
-## Troubleshooting
+## Localhost / Anvil Wallet Notes
 
-- **MetaMask nonce mismatch after restarting anvil** — MetaMask → Settings → Advanced → _Clear activity tab data_.
-- **Stale view-function results** — MetaMask caches across reloads; restart the browser (not the tab).
-- **`Contract address is not a valid address`** — the relayer SDK requires EIP-55 checksummed addresses. Rerun `pnpm generate`.
-- **`pnpm install` asks for a package manager version** — the root pins `packageManager: "pnpm@10.18.3"`. `corepack prepare pnpm@10.18.3 --activate` or match locally.
+Use the local network:
 
-## FHEVM notes
+- RPC URL: `http://127.0.0.1:8545`
+- Chain ID: `31337`
+- Currency symbol: `ETH`
 
-- **ACL is mandatory.** Every encrypted value needs `FHE.allowThis(handle)` + `FHE.allow(handle, user)` — reads silently fail without it. `FHECounter.sol` does this explicitly.
-- **Types are baked into ciphertext handles.** The frontend's `type: "euint32"` must match the contract's `externalEuint32` parameter — mismatch reverts with `InvalidType()`.
-- **Local runs cleartext mode.** Anvil hosts a `CleartextFHEVMExecutor` that mirrors every FHE op into a `plaintexts(bytes32)` mapping. No KMS, no gateway, no WASM — `RelayerCleartext` reads plaintext directly. Dev-only.
-- **Sepolia uses the real relayer.** `RelayerWeb` spins up a Web Worker and pulls FHE crypto from Zama's CDN. Needs `NEXT_PUBLIC_ALCHEMY_API_KEY`.
+Common Anvil test wallets:
 
-## References
+- Account 0 address: `0xf39F...2266`
+- Account 0 private key: `0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80`
+- Account 1 address: `0x7099...79C8`
+- Account 1 private key: `0x59c6995e998f97a5a0044966f094538e5dae66190b5e6ba7ab557f5d1f0b44d2`
 
-[Zama Protocol docs](https://docs.zama.org/) · [`@zama-fhe/sdk`](https://github.com/zama-ai/sdk) · [forge-fhevm](https://github.com/zama-ai/forge-fhevm) · [OpenZeppelin Confidential Contracts](https://github.com/OpenZeppelin/openzeppelin-confidential-contracts) · [Discord](https://discord.com/invite/zama)
+For the demo, connect with the first wallet to create Tender #0 and submit the first bid. Then switch to a second wallet to submit the next vendor bid.
+
+If MetaMask shows stale balances, nonce errors, or old activity after restarting Anvil, clear the wallet activity data for the local account or reset the account in MetaMask advanced settings.
+
+## Known MVP Limitations
+
+- Tender #0 only. The UI intentionally focuses on a single tender.
+- No winner reveal UI yet.
+- No multi-tender browser yet.
+- Local demo only unless the contracts are deployed and frontend addresses are regenerated for another chain.
+- Local FHE execution uses a cleartext development stack; it is not equivalent to a production privacy deployment.
+- The project has not been audited.
+
+## Architecture Summary
+
+Contracts:
+
+- `packages/foundry/src/CloakRFP.sol` contains the confidential tender contract.
+- `createTender` stores public tender metadata and scoring weights.
+- `submitBid` accepts encrypted `externalEuint32` bid fields and proofs, computes an encrypted weighted score, and records either the first best bid or a pending encrypted comparison.
+- `resolvePendingBest` verifies the public decrypt proof for the encrypted comparison and updates the best vendor when the pending bid is better.
+- `packages/foundry/test/CloakRFP.t.sol` covers tender creation, encrypted bid submission, pending comparison resolution, repeated bid rejection, ACL expectations, and score overflow behavior.
+
+Frontend:
+
+- `packages/nextjs/app/page.tsx` contains the premium Tender #0 demo UI.
+- `packages/nextjs/hooks/cloakrfp/useCloakRFPWagmi.ts` wraps contract reads/writes, Zama encryption, public decrypt, transaction receipt waiting, and user-facing status messages.
+- `packages/nextjs/contracts/` contains generated ABI/address files consumed by the frontend.
+- `packages/nextjs/components/DappWrapperWithProviders.tsx` wires the app providers, including wallet and Zama SDK context.
+
+Scripts:
+
+- `scripts/chain.sh` starts Anvil, deploys the local FHEVM development stack, deploys contracts, and keeps the local chain running.
+- `scripts/deploy-localhost.sh` deploys `FHECounter` and `CloakRFP` to a running local chain and regenerates frontend artifacts.
+- `scripts/generateTsAbis.ts` emits frontend contract ABI/address TypeScript files from Foundry output and deployment broadcasts.
 
 ## License
 

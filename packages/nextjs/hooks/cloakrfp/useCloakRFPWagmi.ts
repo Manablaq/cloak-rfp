@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
+import { useEncrypt } from "@zama-fhe/react-sdk";
 import { BaseError, ContractFunctionRevertedError, isAddressEqual } from "viem";
+import { bytesToHex } from "viem";
 import { useAccount, useChainId, useReadContract, useWriteContract } from "wagmi";
 import { waitForTransactionReceipt } from "wagmi/actions";
 import { CloakRFP } from "~~/contracts/CloakRFP";
@@ -32,6 +34,15 @@ export type CreateTenderForm = {
   warrantyMonthsWeight: number;
   quantityWeight: number;
 };
+
+export type VendorBidForm = {
+  price: number;
+  deliveryDays: number;
+  warrantyMonths: number;
+  quantity: number;
+};
+
+type BidStatus = "idle" | "encrypting" | "awaiting-wallet" | "submitting" | "confirmed" | "error";
 
 const TENDER_ID = 0n;
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
@@ -68,14 +79,39 @@ const formatError = (error: unknown) => {
   return String(error);
 };
 
+const formatBidError = (error: unknown) => {
+  const message = formatError(error);
+  if (message.includes("User rejected") || message.includes("rejected the request")) {
+    return "Wallet confirmation was cancelled.";
+  }
+  if (message.includes("BidAlreadySubmitted")) {
+    return "This wallet has already submitted a bid for tender #0.";
+  }
+  if (message.includes("TenderNotFound")) {
+    return "Tender #0 is not available yet.";
+  }
+  if (message.includes("PendingBestResolutionRequired")) {
+    return "A pending encrypted comparison must be resolved before another bid can be accepted.";
+  }
+  if (message.includes("InvalidType") || message.includes("SenderNotAllowedToUseHandle")) {
+    return "Encrypted bid proof was rejected by the contract.";
+  }
+  if (message.length > 160) return "Encrypted bid submission failed. Check the wallet and local chain, then try again.";
+  return message;
+};
+
 export const useCloakRFPWagmi = () => {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
   const cloakRFP = useMemo(() => deploymentFor(CloakRFP, chainId), [chainId]);
   const { writeContractAsync, isPending: isWriting } = useWriteContract();
+  const encrypt = useEncrypt();
   const [message, setMessage] = useState("");
+  const [bidMessage, setBidMessage] = useState("");
+  const [bidStatus, setBidStatus] = useState<BidStatus>("idle");
   const [isWaitingForReceipt, setIsWaitingForReceipt] = useState(false);
   const [isManualRefreshing, setIsManualRefreshing] = useState(false);
+  const [isSubmittingBid, setIsSubmittingBid] = useState(false);
 
   const hasContract = Boolean(cloakRFP?.address && cloakRFP?.abi);
 
@@ -161,18 +197,104 @@ export const useCloakRFPWagmi = () => {
     [cloakRFP, hasContract, isConnected, refreshTenderForSource, writeContractAsync],
   );
 
+  const submitBid = useCallback(
+    async (form: VendorBidForm) => {
+      if (!hasContract || !cloakRFP || !isConnected || !address || !tender || tenderMissing) return;
+      if (tender[6] && !isAddressEqual(tender[6], ZERO_ADDRESS)) {
+        setBidStatus("error");
+        setBidMessage("A pending encrypted comparison must be resolved before another bid can be submitted.");
+        return;
+      }
+      setIsSubmittingBid(true);
+      setBidStatus("encrypting");
+      setBidMessage("Encrypting bid fields...");
+
+      try {
+        const encryptField = async (value: number) => {
+          const encrypted = await encrypt.mutateAsync({
+            values: [{ value: BigInt(value), type: "euint32" }],
+            contractAddress: cloakRFP.address,
+            userAddress: address,
+          });
+
+          const handle = encrypted.handles[0];
+          if (!handle) throw new Error("Encrypted handle missing");
+          return {
+            handle: bytesToHex(handle),
+            proof: bytesToHex(encrypted.inputProof),
+          };
+        };
+
+        const price = await encryptField(form.price);
+        const deliveryDays = await encryptField(form.deliveryDays);
+        const warrantyMonths = await encryptField(form.warrantyMonths);
+        const quantity = await encryptField(form.quantity);
+
+        setBidStatus("awaiting-wallet");
+        setBidMessage("Waiting for wallet confirmation...");
+        const hash = await writeContractAsync({
+          address: cloakRFP.address,
+          abi: cloakRFP.abi,
+          functionName: "submitBid",
+          args: [
+            TENDER_ID,
+            {
+              price: price.handle,
+              deliveryDays: deliveryDays.handle,
+              warrantyMonths: warrantyMonths.handle,
+              quantity: quantity.handle,
+              priceProof: price.proof,
+              deliveryDaysProof: deliveryDays.proof,
+              warrantyMonthsProof: warrantyMonths.proof,
+              quantityProof: quantity.proof,
+            },
+          ],
+          gas: 15_000_000n,
+        });
+
+        setBidStatus("submitting");
+        setBidMessage("Submitting encrypted bid. Waiting for confirmation...");
+        await waitForTransactionReceipt(wagmiConfig, { hash });
+        setBidStatus("confirmed");
+        setBidMessage("Bid confirmed. Refreshing tender #0...");
+        const refresh = await refreshTenderForSource("create");
+        if (refresh.ok) setBidMessage("Encrypted bid confirmed and tender #0 refreshed.");
+      } catch (error) {
+        setBidStatus("error");
+        setBidMessage(formatBidError(error));
+      } finally {
+        setIsSubmittingBid(false);
+      }
+    },
+    [
+      address,
+      cloakRFP,
+      encrypt,
+      hasContract,
+      isConnected,
+      refreshTenderForSource,
+      tender,
+      tenderMissing,
+      writeContractAsync,
+    ],
+  );
+
   return {
     account: address,
+    bidMessage,
+    bidStatus,
     chainId,
     contractAddress: cloakRFP?.address,
     hasContract,
     isConnected,
     isLoadingTender: tenderRead.isFetching || isManualRefreshing,
+    isSubmittingBid,
     isWriting: isWriting || isWaitingForReceipt,
     message,
     readError,
     refreshTender,
     createTender,
+    submitBid,
     tenderMissing,
     tender:
       tender && !tenderMissing

@@ -3,7 +3,7 @@
 import type { Dispatch, FormEvent, ReactNode, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { RainbowKitCustomConnectButton } from "~~/components/helper/RainbowKitCustomConnectButton";
-import { CreateTenderForm, useCloakRFPWagmi } from "~~/hooks/cloakrfp/useCloakRFPWagmi";
+import { CreateTenderForm, VendorBidForm, useCloakRFPWagmi } from "~~/hooks/cloakrfp/useCloakRFPWagmi";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const THEME_STORAGE_KEY = "cloakrfp-theme";
@@ -16,6 +16,13 @@ const initialForm: CreateTenderForm = {
   deliveryDaysWeight: 5,
   warrantyMonthsWeight: 0,
   quantityWeight: 2,
+};
+
+const initialBidForm: VendorBidForm = {
+  price: 100,
+  deliveryDays: 5,
+  warrantyMonths: 12,
+  quantity: 20,
 };
 
 const shortenAddress = (address?: string) => {
@@ -31,6 +38,7 @@ const displayAddress = (address?: string, empty = "None") => {
 export default function Home() {
   const cloakRFP = useCloakRFPWagmi();
   const [form, setForm] = useState<CreateTenderForm>(initialForm);
+  const [bidForm, setBidForm] = useState<VendorBidForm>(initialBidForm);
   const [copied, setCopied] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>("dark");
   const [themeLoaded, setThemeLoaded] = useState(false);
@@ -76,6 +84,24 @@ export default function Home() {
     return "";
   }, [cloakRFP.hasContract, cloakRFP.isConnected, cloakRFP.isWriting]);
 
+  const bidDisabledReason = useMemo(() => {
+    if (!cloakRFP.isConnected) return "Connect wallet";
+    if (!cloakRFP.hasContract) return "Contract address missing";
+    if (cloakRFP.tenderMissing) return "Create tender #0 first";
+    if (!cloakRFP.tender) return "Load tender #0";
+    if (cloakRFP.tender.hasPendingVendor) return "Resolve pending comparison first";
+    if (cloakRFP.isWriting) return "Confirming transaction";
+    if (cloakRFP.isSubmittingBid) return "Submitting encrypted bid";
+    return "";
+  }, [
+    cloakRFP.hasContract,
+    cloakRFP.isConnected,
+    cloakRFP.isSubmittingBid,
+    cloakRFP.isWriting,
+    cloakRFP.tender,
+    cloakRFP.tenderMissing,
+  ]);
+
   const updateNumber = (key: keyof Omit<CreateTenderForm, "metadataURI">, value: string) => {
     const parsed = value === "" ? 0 : Number(value);
     setForm(current => ({
@@ -84,9 +110,23 @@ export default function Home() {
     }));
   };
 
+  const updateBidNumber = (key: keyof VendorBidForm, value: string) => {
+    const parsed = value === "" ? 0 : Number(value);
+    setBidForm(current => ({
+      ...current,
+      [key]: Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : current[key],
+    }));
+  };
+
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     await cloakRFP.createTender(form);
+  };
+
+  const onBidSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (bidDisabledReason) return;
+    await cloakRFP.submitBid(bidForm);
   };
 
   const copyContractAddress = async () => {
@@ -140,16 +180,27 @@ export default function Home() {
           <Reveal id="tender-dashboard">
             <TenderDashboard cloakRFP={cloakRFP} tenderStatus={tenderStatus} />
           </Reveal>
-          <Reveal id="create-tender">
-            <CreateTenderPanel
-              cloakRFP={cloakRFP}
-              createDisabledReason={createDisabledReason}
-              form={form}
-              onSubmit={onSubmit}
-              setForm={setForm}
-              updateNumber={updateNumber}
-            />
-          </Reveal>
+          <div className="space-y-8">
+            <Reveal id="create-tender">
+              <CreateTenderPanel
+                cloakRFP={cloakRFP}
+                createDisabledReason={createDisabledReason}
+                form={form}
+                onSubmit={onSubmit}
+                setForm={setForm}
+                updateNumber={updateNumber}
+              />
+            </Reveal>
+            <Reveal id="vendor-bid">
+              <VendorBidPanel
+                bidDisabledReason={bidDisabledReason}
+                cloakRFP={cloakRFP}
+                form={bidForm}
+                onSubmit={onBidSubmit}
+                updateNumber={updateBidNumber}
+              />
+            </Reveal>
+          </div>
         </div>
 
         <Reveal>
@@ -437,7 +488,7 @@ function TenderEmptyState() {
       <div>
         <h3 className="text-2xl font-bold text-[var(--heading)]">Tender #0 has not been created</h3>
         <p className="mt-3 max-w-2xl text-sm leading-7 text-[var(--muted)]">
-          Start with public rules and weights. Encrypted vendor bid entry remains reserved for the next milestone.
+          Start with public rules and weights before encrypted vendor bid entry opens.
         </p>
       </div>
     </div>
@@ -466,7 +517,7 @@ function CreateTenderPanel({
         <p className="micro-label">Guided workflow</p>
         <h2 className="section-title mt-2">Create tender</h2>
         <p className="mt-3 text-sm leading-7 text-[var(--muted)]">
-          Weights are public and auditable. Vendor bid values will be encrypted in the next milestone before comparison.
+          Weights are public and auditable. They define how encrypted vendor bid values are scored on-chain.
         </p>
       </div>
 
@@ -520,6 +571,92 @@ function CreateTenderPanel({
         {cloakRFP.message && <InlineMessage message={cloakRFP.message} tone={messageTone} />}
       </div>
     </form>
+  );
+}
+
+function VendorBidPanel({
+  bidDisabledReason,
+  cloakRFP,
+  form,
+  onSubmit,
+  updateNumber,
+}: {
+  bidDisabledReason: string;
+  cloakRFP: ReturnType<typeof useCloakRFPWagmi>;
+  form: VendorBidForm;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  updateNumber: (key: keyof VendorBidForm, value: string) => void;
+}) {
+  const messageTone = cloakRFP.bidStatus === "error" ? "error" : "info";
+  const pendingComparisonMessage = cloakRFP.tender?.hasPendingVendor
+    ? "A pending encrypted comparison must be resolved before another bid can be submitted."
+    : "";
+  const submitLabel =
+    cloakRFP.bidStatus === "encrypting"
+      ? "Encrypting fields"
+      : cloakRFP.bidStatus === "awaiting-wallet"
+        ? "Confirm in wallet"
+        : cloakRFP.bidStatus === "submitting"
+          ? "Submitting bid"
+          : bidDisabledReason || "Submit encrypted bid";
+
+  return (
+    <form className="premium-card p-5 sm:p-6 lg:p-7" onSubmit={onSubmit}>
+      <div className="border-b border-[var(--border)] pb-6">
+        <p className="micro-label">Vendor workflow</p>
+        <h2 className="section-title mt-2">Submit bid</h2>
+        <p className="mt-3 text-sm leading-7 text-[var(--muted)]">
+          Bid values are encrypted as euint32 inputs for tender #0. Only handles and proofs are sent to the contract.
+        </p>
+      </div>
+
+      <div className="mt-6 space-y-5">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <NumberInput label="Price" onChange={value => updateNumber("price", value)} value={form.price} />
+          <NumberInput
+            label="Delivery days"
+            onChange={value => updateNumber("deliveryDays", value)}
+            value={form.deliveryDays}
+          />
+          <NumberInput
+            label="Warranty months"
+            onChange={value => updateNumber("warrantyMonths", value)}
+            value={form.warrantyMonths}
+          />
+          <NumberInput label="Quantity" onChange={value => updateNumber("quantity", value)} value={form.quantity} />
+        </div>
+
+        <div className="bid-state-grid">
+          <BidState
+            active={!cloakRFP.isConnected}
+            label="Wallet"
+            value={cloakRFP.isConnected ? "Connected" : "Disconnected"}
+          />
+          <BidState
+            active={!cloakRFP.hasContract}
+            label="Contract"
+            value={cloakRFP.hasContract ? "Ready" : "Missing"}
+          />
+          <BidState label="Tender #0" active={!cloakRFP.tender} value={cloakRFP.tender ? "Loaded" : "Missing"} />
+        </div>
+
+        <button className="primary-action full" disabled={Boolean(bidDisabledReason)} type="submit">
+          {submitLabel}
+        </button>
+
+        {pendingComparisonMessage && <InlineMessage message={pendingComparisonMessage} tone="info" />}
+        {cloakRFP.bidMessage && <InlineMessage message={cloakRFP.bidMessage} tone={messageTone} />}
+      </div>
+    </form>
+  );
+}
+
+function BidState({ active, label, value }: { active: boolean; label: string; value: string }) {
+  return (
+    <div className={`bid-state ${active ? "needs-attention" : ""}`}>
+      <span className="micro-label">{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }
 
@@ -1238,6 +1375,36 @@ function ThemeStyles() {
 
       .empty-visual span:nth-child(3) {
         width: 52%;
+      }
+
+      .bid-state-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.6rem;
+      }
+
+      .bid-state {
+        min-width: 0;
+        border: 1px solid color-mix(in srgb, var(--accent-cyan) 18%, transparent);
+        border-radius: 18px;
+        background: linear-gradient(180deg, rgb(255 255 255 / 0.024), transparent), var(--panel-soft);
+        padding: 0.82rem;
+      }
+
+      .bid-state.needs-attention {
+        border-color: color-mix(in srgb, var(--accent-gold) 38%, transparent);
+        background: var(--accent-gold-soft);
+      }
+
+      .bid-state strong {
+        display: block;
+        margin-top: 0.38rem;
+        overflow: hidden;
+        color: var(--heading);
+        font-size: 0.82rem;
+        font-weight: 900;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .premium-input {

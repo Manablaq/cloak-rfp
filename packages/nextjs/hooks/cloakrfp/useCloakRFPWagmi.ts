@@ -47,7 +47,22 @@ const isTenderNotFound = (error: unknown) => {
   return walk(error) || (error instanceof Error && error.message.includes("TenderNotFound"));
 };
 
+const isRpcConnectionError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return (
+    message.includes("HTTP request failed") ||
+    message.includes("Failed to fetch") ||
+    message.includes("fetch failed") ||
+    message.includes("NetworkError") ||
+    message.includes("ECONNREFUSED") ||
+    message.includes("Could not connect")
+  );
+};
+
 const formatError = (error: unknown) => {
+  if (isRpcConnectionError(error)) {
+    return "Could not reach local chain. Make sure pnpm chain is running, then refresh.";
+  }
   if (error instanceof BaseError) return error.shortMessage;
   if (error instanceof Error) return error.message;
   return String(error);
@@ -60,6 +75,7 @@ export const useCloakRFPWagmi = () => {
   const { writeContractAsync, isPending: isWriting } = useWriteContract();
   const [message, setMessage] = useState("");
   const [isWaitingForReceipt, setIsWaitingForReceipt] = useState(false);
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
 
   const hasContract = Boolean(cloakRFP?.address && cloakRFP?.abi);
 
@@ -79,12 +95,37 @@ export const useCloakRFPWagmi = () => {
   const tenderMissing = isTenderNotFound(tenderRead.error);
   const readError = tenderRead.error && !tenderMissing ? formatError(tenderRead.error) : "";
 
-  const refreshTender = useCallback(async () => {
-    const result = await tenderRead.refetch();
-    if (result.error && !isTenderNotFound(result.error)) {
-      setMessage(`getTender(0) failed: ${formatError(result.error)}`);
-    }
-  }, [tenderRead]);
+  const refreshTenderForSource = useCallback(
+    async (source: "create" | "manual") => {
+      if (source === "manual") {
+        setMessage("Refreshing state...");
+        setIsManualRefreshing(true);
+      }
+      try {
+        const result = await tenderRead.refetch();
+        if (result.error && !isTenderNotFound(result.error)) {
+          const errorMessage = formatError(result.error);
+          setMessage(errorMessage);
+          return { ok: false, error: errorMessage };
+        }
+        if (result.error && isTenderNotFound(result.error)) {
+          const errorMessage =
+            source === "create"
+              ? "Tender confirmed, but tender 0 is still not available."
+              : "Tender #0 has not been created yet.";
+          setMessage(errorMessage);
+          return { ok: false, error: errorMessage };
+        }
+        if (source === "manual") setMessage("Tender state refreshed.");
+        return { ok: true };
+      } finally {
+        if (source === "manual") setIsManualRefreshing(false);
+      }
+    },
+    [tenderRead],
+  );
+
+  const refreshTender = useCallback(() => refreshTenderForSource("manual"), [refreshTenderForSource]);
 
   const createTender = useCallback(
     async (form: CreateTenderForm) => {
@@ -109,14 +150,15 @@ export const useCloakRFPWagmi = () => {
         setIsWaitingForReceipt(true);
         await waitForTransactionReceipt(wagmiConfig, { hash });
         setMessage("Tender confirmed. Refreshing public data...");
-        await refreshTender();
+        const refresh = await refreshTenderForSource("create");
+        if (refresh.ok) setMessage("Tender confirmed and loaded.");
       } catch (error) {
         setMessage(`createTender failed: ${formatError(error)}`);
       } finally {
         setIsWaitingForReceipt(false);
       }
     },
-    [cloakRFP, hasContract, isConnected, refreshTender, writeContractAsync],
+    [cloakRFP, hasContract, isConnected, refreshTenderForSource, writeContractAsync],
   );
 
   return {
@@ -125,7 +167,7 @@ export const useCloakRFPWagmi = () => {
     contractAddress: cloakRFP?.address,
     hasContract,
     isConnected,
-    isLoadingTender: tenderRead.isFetching,
+    isLoadingTender: tenderRead.isFetching || isManualRefreshing,
     isWriting: isWriting || isWaitingForReceipt,
     message,
     readError,
@@ -148,6 +190,7 @@ export const useCloakRFPWagmi = () => {
             bestScore: tender[5],
             pendingVendor: tender[6],
             hasPublicBestVendor: !isAddressEqual(tender[4], ZERO_ADDRESS),
+            hasPendingVendor: !isAddressEqual(tender[6], ZERO_ADDRESS),
           }
         : undefined,
   };

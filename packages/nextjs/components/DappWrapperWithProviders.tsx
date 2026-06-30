@@ -10,7 +10,6 @@ import { AppProgressBar as ProgressBar } from "next-nprogress-bar";
 import { useTheme } from "next-themes";
 import { Toaster } from "react-hot-toast";
 import { WagmiProvider, useChainId } from "wagmi";
-import { Header } from "~~/components/Header";
 import { BlockieAvatar } from "~~/components/helper";
 import { wagmiConfig } from "~~/services/web3/wagmiConfig";
 // Swap to `@zama-fhe/react-sdk/wagmi` once a patched stable ships — the fix
@@ -92,7 +91,6 @@ export const DappWrapperWithProviders = ({ children }: { children: React.ReactNo
           <ZamaRuntimeProvider>
             <ProgressBar height="3px" color="#2299dd" />
             <div className={`flex flex-col min-h-screen`}>
-              <Header />
               <main className="relative flex flex-col flex-1">{children}</main>
             </div>
             <Toaster />

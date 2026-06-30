@@ -158,11 +158,11 @@ Use the local network:
 Common Anvil test wallets:
 
 - Account 0 address: `0xf39F...2266`
-- Account 0 private key: `0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80`
 - Account 1 address: `0x7099...79C8`
-- Account 1 private key: `0x59c6995e998f97a5a0044966f094538e5dae66190b5e6ba7ab557f5d1f0b44d2`
 
-For the demo, connect with the first wallet to create Tender #0 and submit the first bid. Then switch to a second wallet to submit the next vendor bid.
+Use one of the default Anvil accounts printed by your local node. For the demo, connect with the first wallet to create Tender #0 and submit the first bid. Then switch to a second wallet to submit the next vendor bid.
+
+Never use local demo keys on real networks. Fund test accounts with `anvil_setBalance` if needed.
 
 If MetaMask shows stale balances, nonce errors, or old activity after restarting Anvil, clear the wallet activity data for the local account or reset the account in MetaMask advanced settings.
 

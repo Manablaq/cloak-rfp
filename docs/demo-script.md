@@ -35,11 +35,9 @@ In MetaMask, add or select the local network:
 - RPC URL: `http://127.0.0.1:8545`
 - Chain ID: `31337`
 
-Import the first Anvil account if needed:
+Import the first Anvil account if needed. Use one of the default Anvil accounts printed by your local node.
 
-```text
-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
-```
+Never use local demo keys on real networks. Fund test accounts with `anvil_setBalance` if needed.
 
 Connect this wallet in the app. It will act as the buyer for the demo.
 
@@ -69,11 +67,7 @@ The first bid becomes the current best vendor because there is no existing best 
 
 ## 6. Switch to a Second Vendor Wallet
 
-In MetaMask, import or switch to a second Anvil account:
-
-```text
-0x59c6995e998f97a5a0044966f094538e5dae66190b5e6ba7ab557f5d1f0b44d2
-```
+In MetaMask, import or switch to a second default Anvil account printed by your local node.
 
 Reconnect or switch the active wallet in the app if needed.
 

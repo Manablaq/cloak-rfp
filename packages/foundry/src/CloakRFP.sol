@@ -114,20 +114,18 @@ contract CloakRFP is ZamaEthereumConfig {
         emit BidSubmitted(tenderId, msg.sender);
     }
 
-    function resolvePendingBest(uint256 tenderId, uint256[] calldata cleartexts, bytes calldata decryptionProof)
-        external
-    {
+    function resolvePendingBest(uint256 tenderId, uint256 cleartext, bytes calldata decryptionProof) external {
         Tender storage tender = _getTender(tenderId);
         address pendingVendor = tender.pendingVendor;
         if (pendingVendor == address(0)) revert NoPendingBest(tenderId);
-        if (cleartexts.length != 1 || cleartexts[0] > 1) revert InvalidDecryptionResult();
+        if (cleartext > 1) revert InvalidDecryptionResult();
 
         Bid storage bid = _bids[tenderId][pendingVendor];
         bytes32[] memory handles = new bytes32[](1);
         handles[0] = ebool.unwrap(bid.pendingIsBetter);
-        FHE.checkSignatures(handles, abi.encode(cleartexts), decryptionProof);
+        FHE.checkSignatures(handles, abi.encode(cleartext), decryptionProof);
 
-        bool isBetter = cleartexts[0] == 1;
+        bool isBetter = cleartext == 1;
         if (isBetter) {
             tender.bestVendor = pendingVendor;
             tender.bestScore = bid.score;

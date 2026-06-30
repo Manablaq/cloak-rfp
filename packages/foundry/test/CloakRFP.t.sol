@@ -215,10 +215,14 @@ contract CloakRFPTest is FhevmTest {
 
     function _resolvePending(uint256 tenderId, address pendingVendor) internal {
         ebool pendingComparison = cloakRFP.getPendingComparison(tenderId, pendingVendor);
+        bytes32 handle = ebool.unwrap(pendingComparison);
         bytes32[] memory handles = new bytes32[](1);
-        handles[0] = ebool.unwrap(pendingComparison);
+        handles[0] = handle;
 
-        (uint256[] memory cleartexts, bytes memory decryptionProof) = publicDecrypt(handles);
-        cloakRFP.resolvePendingBest(tenderId, cleartexts, decryptionProof);
+        (uint256[] memory cleartexts,) = publicDecrypt(handles);
+        uint256 cleartext = cleartexts[0];
+        bytes memory decryptionProof = buildDecryptionProof(handle, abi.encode(cleartext));
+
+        cloakRFP.resolvePendingBest(tenderId, cleartext, decryptionProof);
     }
 }

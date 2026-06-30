@@ -1,10 +1,10 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import { useEncrypt } from "@zama-fhe/react-sdk";
-import { BaseError, ContractFunctionRevertedError, isAddressEqual } from "viem";
-import { bytesToHex } from "viem";
+import { useEncrypt, usePublicDecrypt } from "@zama-fhe/react-sdk";
+import { BaseError, ContractFunctionRevertedError, bytesToHex, decodeAbiParameters, isAddressEqual } from "viem";
 import { useAccount, useChainId, useReadContract, useWriteContract } from "wagmi";
+import { readContract } from "wagmi/actions";
 import { waitForTransactionReceipt } from "wagmi/actions";
 import { CloakRFP } from "~~/contracts/CloakRFP";
 import { wagmiConfig } from "~~/services/web3/wagmiConfig";
@@ -43,6 +43,7 @@ export type VendorBidForm = {
 };
 
 type BidStatus = "idle" | "encrypting" | "awaiting-wallet" | "submitting" | "confirmed" | "error";
+type ResolveStatus = "idle" | "ready" | "decrypting" | "awaiting-wallet" | "resolving" | "confirmed" | "error";
 
 const TENDER_ID = 0n;
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
@@ -79,6 +80,18 @@ const formatError = (error: unknown) => {
   return String(error);
 };
 
+const shortErrorMessage = (error: unknown) => {
+  if (error instanceof BaseError) return error.shortMessage;
+  if (error instanceof Error) return error.message;
+  return String(error);
+};
+
+const toHexBytes = (value: unknown, label: string) => {
+  if (typeof value === "string" && value.startsWith("0x")) return value as `0x${string}`;
+  if (value instanceof Uint8Array) return bytesToHex(value);
+  throw new Error(`${label} was not returned as hex bytes`);
+};
+
 const formatBidError = (error: unknown) => {
   const message = formatError(error);
   if (message.includes("User rejected") || message.includes("rejected the request")) {
@@ -100,18 +113,38 @@ const formatBidError = (error: unknown) => {
   return message;
 };
 
+const formatResolveError = (error: unknown) => {
+  const message = formatError(error);
+  if (message.includes("User rejected") || message.includes("rejected the request")) {
+    return "Wallet confirmation cancelled.";
+  }
+  if (message.includes("NoPendingBest") || message.includes("TenderNotFound")) {
+    return "Pending comparison not found.";
+  }
+  if (isRpcConnectionError(error)) {
+    return "Could not reach local chain. Make sure pnpm chain is running, then refresh.";
+  }
+  const shortMessage = shortErrorMessage(error);
+  if (shortMessage && shortMessage.length <= 140) return `Resolve failed: ${shortMessage}`;
+  return "Resolve failed: refresh tender state, then try again.";
+};
+
 export const useCloakRFPWagmi = () => {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
   const cloakRFP = useMemo(() => deploymentFor(CloakRFP, chainId), [chainId]);
   const { writeContractAsync, isPending: isWriting } = useWriteContract();
   const encrypt = useEncrypt();
+  const publicDecrypt = usePublicDecrypt();
   const [message, setMessage] = useState("");
   const [bidMessage, setBidMessage] = useState("");
   const [bidStatus, setBidStatus] = useState<BidStatus>("idle");
+  const [resolveMessage, setResolveMessage] = useState("");
+  const [resolveStatus, setResolveStatus] = useState<ResolveStatus>("idle");
   const [isWaitingForReceipt, setIsWaitingForReceipt] = useState(false);
   const [isManualRefreshing, setIsManualRefreshing] = useState(false);
   const [isSubmittingBid, setIsSubmittingBid] = useState(false);
+  const [isResolvingPendingBest, setIsResolvingPendingBest] = useState(false);
 
   const hasContract = Boolean(cloakRFP?.address && cloakRFP?.abi);
 
@@ -279,6 +312,76 @@ export const useCloakRFPWagmi = () => {
     ],
   );
 
+  const resolvePendingBest = useCallback(async () => {
+    if (!hasContract || !cloakRFP || !isConnected || !tender || tenderMissing) return;
+    if (!tender[6] || isAddressEqual(tender[6], ZERO_ADDRESS)) {
+      setResolveStatus("idle");
+      setResolveMessage("Pending comparison not found.");
+      return;
+    }
+
+    setIsResolvingPendingBest(true);
+    setResolveStatus("decrypting");
+    setResolveMessage("Decrypting pending comparison...");
+
+    try {
+      const pendingComparisonHandle = (await readContract(wagmiConfig, {
+        address: cloakRFP.address,
+        abi: cloakRFP.abi,
+        functionName: "getPendingComparison",
+        args: [TENDER_ID, tender[6]],
+      })) as `0x${string}`;
+
+      const decrypted = await publicDecrypt.mutateAsync([pendingComparisonHandle]);
+      const abiEncodedClearValues = toHexBytes(decrypted.abiEncodedClearValues, "Public decrypt cleartexts");
+      const decryptionProof = toHexBytes(decrypted.decryptionProof, "Public decrypt proof");
+      const [cleartext] = decodeAbiParameters([{ type: "uint256" }], abiEncodedClearValues);
+
+      if (cleartext > 1n) {
+        throw new Error("Invalid public decrypt cleartext");
+      }
+
+      console.info("CloakRFP resolvePendingBest public decrypt", {
+        pendingComparisonHandle,
+        cleartext: cleartext.toString(),
+        hasDecryptionProof: decryptionProof !== "0x",
+      });
+
+      setResolveStatus("awaiting-wallet");
+      setResolveMessage("Waiting for wallet confirmation...");
+      const hash = await writeContractAsync({
+        address: cloakRFP.address,
+        abi: cloakRFP.abi,
+        functionName: "resolvePendingBest",
+        args: [TENDER_ID, cleartext, decryptionProof],
+        gas: 15_000_000n,
+      });
+
+      setResolveStatus("resolving");
+      setResolveMessage("Resolving encrypted comparison. Waiting for confirmation...");
+      await waitForTransactionReceipt(wagmiConfig, { hash });
+      setResolveStatus("confirmed");
+      setResolveMessage("Comparison resolved. Refreshing tender #0...");
+      const refresh = await refreshTenderForSource("create");
+      if (refresh.ok) setResolveMessage("Comparison resolved and tender #0 refreshed.");
+    } catch (error) {
+      console.error("CloakRFP resolvePendingBest failed", error);
+      setResolveStatus("error");
+      setResolveMessage(formatResolveError(error));
+    } finally {
+      setIsResolvingPendingBest(false);
+    }
+  }, [
+    cloakRFP,
+    hasContract,
+    isConnected,
+    publicDecrypt,
+    refreshTenderForSource,
+    tender,
+    tenderMissing,
+    writeContractAsync,
+  ]);
+
   return {
     account: address,
     bidMessage,
@@ -288,12 +391,19 @@ export const useCloakRFPWagmi = () => {
     hasContract,
     isConnected,
     isLoadingTender: tenderRead.isFetching || isManualRefreshing,
+    isResolvingPendingBest,
     isSubmittingBid,
-    isWriting: isWriting || isWaitingForReceipt,
+    isWriting: isWriting || isWaitingForReceipt || isResolvingPendingBest,
     message,
     readError,
     refreshTender,
     createTender,
+    resolveMessage,
+    resolvePendingBest,
+    resolveStatus:
+      resolveStatus === "idle" && tender && !tenderMissing && !isAddressEqual(tender[6], ZERO_ADDRESS)
+        ? "ready"
+        : resolveStatus,
     submitBid,
     tenderMissing,
     tender:

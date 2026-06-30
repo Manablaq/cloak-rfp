@@ -102,6 +102,24 @@ export default function Home() {
     cloakRFP.tenderMissing,
   ]);
 
+  const resolveDisabledReason = useMemo(() => {
+    if (!cloakRFP.isConnected) return "Connect wallet";
+    if (!cloakRFP.hasContract) return "Contract address missing";
+    if (cloakRFP.tenderMissing) return "Create tender #0 first";
+    if (!cloakRFP.tender) return "Load tender #0";
+    if (!cloakRFP.tender.hasPendingVendor) return "No pending comparison";
+    if (cloakRFP.isResolvingPendingBest) return "Resolving comparison";
+    if (cloakRFP.isWriting) return "Confirming transaction";
+    return "";
+  }, [
+    cloakRFP.hasContract,
+    cloakRFP.isConnected,
+    cloakRFP.isResolvingPendingBest,
+    cloakRFP.isWriting,
+    cloakRFP.tender,
+    cloakRFP.tenderMissing,
+  ]);
+
   const updateNumber = (key: keyof Omit<CreateTenderForm, "metadataURI">, value: string) => {
     const parsed = value === "" ? 0 : Number(value);
     setForm(current => ({
@@ -127,6 +145,11 @@ export default function Home() {
     event.preventDefault();
     if (bidDisabledReason) return;
     await cloakRFP.submitBid(bidForm);
+  };
+
+  const onResolvePendingBest = async () => {
+    if (resolveDisabledReason) return;
+    await cloakRFP.resolvePendingBest();
   };
 
   const copyContractAddress = async () => {
@@ -178,7 +201,12 @@ export default function Home() {
 
         <div className="grid grid-cols-1 gap-8 xl:grid-cols-[1.22fr_0.78fr]">
           <Reveal id="tender-dashboard">
-            <TenderDashboard cloakRFP={cloakRFP} tenderStatus={tenderStatus} />
+            <TenderDashboard
+              cloakRFP={cloakRFP}
+              onResolvePendingBest={onResolvePendingBest}
+              resolveDisabledReason={resolveDisabledReason}
+              tenderStatus={tenderStatus}
+            />
           </Reveal>
           <div className="space-y-8">
             <Reveal id="create-tender">
@@ -385,9 +413,13 @@ function StatusCell({
 
 function TenderDashboard({
   cloakRFP,
+  onResolvePendingBest,
+  resolveDisabledReason,
   tenderStatus,
 }: {
   cloakRFP: ReturnType<typeof useCloakRFPWagmi>;
+  onResolvePendingBest: () => Promise<void>;
+  resolveDisabledReason: string;
   tenderStatus: { description: string; label: string; tone: string };
 }) {
   const messageTone =
@@ -448,6 +480,12 @@ function TenderDashboard({
             />
           </div>
 
+          <ResolvePendingPanel
+            cloakRFP={cloakRFP}
+            onResolvePendingBest={onResolvePendingBest}
+            resolveDisabledReason={resolveDisabledReason}
+          />
+
           <div>
             <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
               <div>
@@ -474,6 +512,52 @@ function TenderDashboard({
         </div>
       )}
     </section>
+  );
+}
+
+function ResolvePendingPanel({
+  cloakRFP,
+  onResolvePendingBest,
+  resolveDisabledReason,
+}: {
+  cloakRFP: ReturnType<typeof useCloakRFPWagmi>;
+  onResolvePendingBest: () => Promise<void>;
+  resolveDisabledReason: string;
+}) {
+  const hasPending = Boolean(cloakRFP.tender?.hasPendingVendor);
+  const resolveTone = cloakRFP.resolveStatus === "error" ? "error" : "info";
+  const title = hasPending ? "Pending comparison ready" : "No pending comparison";
+  const detail = hasPending
+    ? "Public decryption will verify the encrypted comparison and update the best vendor state."
+    : "The tender is ready for the next encrypted vendor bid.";
+  const buttonLabel =
+    cloakRFP.resolveStatus === "decrypting"
+      ? "Decrypting comparison"
+      : cloakRFP.resolveStatus === "awaiting-wallet"
+        ? "Confirm in wallet"
+        : cloakRFP.resolveStatus === "resolving"
+          ? "Resolving comparison"
+          : resolveDisabledReason || "Resolve pending comparison";
+
+  return (
+    <div className={`resolve-panel ${hasPending ? "active" : ""}`}>
+      <div className="min-w-0">
+        <p className="micro-label">Encrypted comparison</p>
+        <h3 className="mt-2 text-xl font-black tracking-[-0.035em] text-[var(--heading)]">{title}</h3>
+        <p className="mt-2 text-sm leading-7 text-[var(--muted)]">{detail}</p>
+      </div>
+      <div className="resolve-action">
+        <button
+          className="secondary-action compact"
+          disabled={Boolean(resolveDisabledReason)}
+          onClick={onResolvePendingBest}
+          type="button"
+        >
+          {buttonLabel}
+        </button>
+        {cloakRFP.resolveMessage && <InlineMessage message={cloakRFP.resolveMessage} tone={resolveTone} />}
+      </div>
+    </div>
   );
 }
 
@@ -1375,6 +1459,38 @@ function ThemeStyles() {
 
       .empty-visual span:nth-child(3) {
         width: 52%;
+      }
+
+      .resolve-panel {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 1rem;
+        border: 1px solid var(--border);
+        border-radius: 22px;
+        background:
+          linear-gradient(135deg, color-mix(in srgb, var(--panel-soft) 84%, transparent), transparent),
+          var(--panel-soft);
+        padding: 1rem;
+      }
+
+      .resolve-panel.active {
+        border-color: color-mix(in srgb, var(--accent-gold) 36%, transparent);
+        background:
+          linear-gradient(135deg, color-mix(in srgb, var(--accent-gold-soft) 78%, transparent), transparent),
+          var(--panel-soft);
+      }
+
+      .resolve-action {
+        display: grid;
+        align-content: start;
+        gap: 0.75rem;
+      }
+
+      @media (min-width: 768px) {
+        .resolve-panel {
+          grid-template-columns: minmax(0, 1fr) minmax(220px, 0.42fr);
+          align-items: start;
+        }
       }
 
       .bid-state-grid {

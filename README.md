@@ -12,7 +12,7 @@ Public procurement and competitive RFP workflows need transparency around rules,
 
 ## Solution
 
-CloakRFP keeps tender metadata and scoring weights public, then accepts encrypted vendor bids. The contract computes a weighted score over encrypted bid fields and tracks the current best vendor. When a later vendor submits a bid, the contract creates an encrypted comparison against the current best score. That comparison can be publicly decrypted as a boolean so the contract can update the best vendor without revealing the bid values or scores.
+CloakRFP keeps tender metadata and scoring weights public, then accepts encrypted vendor bids. The contract computes a weighted score over encrypted bid fields and tracks the current best vendor. When a later vendor submits a bid, the contract creates an encrypted comparison against the current best score. That comparison can be publicly decrypted as a boolean so the contract can update the best vendor without revealing the bid values or scores. After pending comparisons are resolved, the buyer can finalize the tender and lock the current best vendor as the final winner.
 
 The current MVP supports multiple public tenders in the UI: users can create tenders, select Tender #0, Tender #1, and later IDs, then bid on or resolve the selected tender.
 
@@ -40,7 +40,8 @@ Public:
 - Tender metadata URI.
 - Public scoring weights.
 - Vendor addresses that submit bids.
-- Current best vendor address.
+- Current best vendor address before finalization.
+- Final winner address after the buyer closes the tender.
 - Pending vendor address.
 - Whether a pending encrypted comparison resolved to true or false.
 
@@ -65,6 +66,7 @@ Implemented:
 - Encrypted score computation.
 - Sequential multi-vendor bidding.
 - Pending encrypted comparison resolution.
+- Buyer-only tender finalization that locks the current best vendor as the final winner.
 - Premium Next.js demo UI with wallet connection, refresh state, tender browsing, bid form, resolve action, and current best vendor state.
 
 Not implemented yet:
@@ -79,7 +81,9 @@ Not implemented yet:
 3. Submit the first encrypted bid.
 4. Switch wallet and submit a second encrypted bid.
 5. Resolve the pending encrypted comparison.
-6. Create or select another tender.
+6. Switch back to the buyer wallet and finalize the tender.
+7. Confirm the final winner is locked.
+8. Create or select another tender.
 
 See [docs/demo-script.md](docs/demo-script.md) for a reviewer-friendly walkthrough.
 
@@ -167,7 +171,7 @@ If MetaMask shows stale balances, nonce errors, or old activity after restarting
 
 ## Known MVP Limitations
 
-- No final award/close tender flow yet; the UI shows the current best vendor while tenders remain open.
+- Finalization locks the public winner address, but it does not reveal bid values or encrypted scores.
 - Local demo only unless the contracts are deployed and frontend addresses are regenerated for another chain.
 - Local FHE execution uses a cleartext development stack; it is not equivalent to a production privacy deployment.
 - Private bid values and encrypted numeric scores are not revealed in the UI.
@@ -181,6 +185,7 @@ Contracts:
 - `createTender` stores public tender metadata and scoring weights.
 - `submitBid` accepts encrypted `externalEuint32` bid fields and proofs, computes an encrypted weighted score, and records either the first best bid or a pending encrypted comparison.
 - `resolvePendingBest` verifies the public decrypt proof for the encrypted comparison and updates the best vendor when the pending bid is better.
+- `closeTender` lets only the buyer finalize an open tender with a current best vendor and no pending comparison. It prevents later bid submission and locks the final winner address without revealing encrypted commercial terms.
 - `packages/foundry/test/CloakRFP.t.sol` covers tender creation, encrypted bid submission, pending comparison resolution, repeated bid rejection, ACL expectations, and score overflow behavior.
 
 Frontend:

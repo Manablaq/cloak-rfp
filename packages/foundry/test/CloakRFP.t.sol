@@ -42,6 +42,7 @@ contract CloakRFPTest is FhevmTest {
             string memory metadataURI,
             CloakRFP.ScoringWeights memory storedWeights,
             bool hasBest,
+            bool closed,
             address bestVendor,
             euint128 bestScore,
             address pendingVendor
@@ -54,6 +55,7 @@ contract CloakRFPTest is FhevmTest {
         assertEq(storedWeights.warrantyMonths, 1);
         assertEq(storedWeights.quantity, 2);
         assertFalse(hasBest);
+        assertFalse(closed);
         assertEq(bestVendor, address(0));
         assertEq(euint128.unwrap(bestScore), bytes32(0));
         assertEq(pendingVendor, address(0));
@@ -75,9 +77,9 @@ contract CloakRFPTest is FhevmTest {
         assertEq(secondTenderId, 1);
         assertEq(cloakRFP.nextTenderId(), 2);
 
-        (address firstBuyer, string memory firstMetadata, CloakRFP.ScoringWeights memory storedFirstWeights,,,,) =
+        (address firstBuyer, string memory firstMetadata, CloakRFP.ScoringWeights memory storedFirstWeights,,,,,) =
             cloakRFP.getTender(firstTenderId);
-        (address secondBuyer, string memory secondMetadata, CloakRFP.ScoringWeights memory storedSecondWeights,,,,) =
+        (address secondBuyer, string memory secondMetadata, CloakRFP.ScoringWeights memory storedSecondWeights,,,,,) =
             cloakRFP.getTender(secondTenderId);
 
         assertEq(firstBuyer, buyer);
@@ -100,10 +102,124 @@ contract CloakRFPTest is FhevmTest {
 
         _submitBid(tenderId, alice, 100, 5, 12, 20);
 
-        (,,,, address bestVendor, euint128 bestScore,) = cloakRFP.getTender(tenderId);
+        (,,,,, address bestVendor, euint128 bestScore,) = cloakRFP.getTender(tenderId);
         assertEq(bestVendor, alice);
         assertEq(decrypt(bestScore), 165);
         assertEq(decrypt(cloakRFP.getBidScore(tenderId, alice)), 165);
+    }
+
+    function test_buyerCanCloseTenderAfterValidBid() public {
+        uint256 tenderId = _createTender();
+        _submitBid(tenderId, alice, 100, 5, 12, 20);
+
+        vm.expectEmit(true, true, true, true);
+        emit CloakRFP.TenderClosed(tenderId, buyer, alice);
+
+        vm.prank(buyer);
+        cloakRFP.closeTender(tenderId);
+
+        (,,,, bool closed, address bestVendor,, address pendingVendor) = cloakRFP.getTender(tenderId);
+        assertTrue(closed);
+        assertEq(bestVendor, alice);
+        assertEq(pendingVendor, address(0));
+    }
+
+    function test_cannotCloseTenderWithNoBids() public {
+        uint256 tenderId = _createTender();
+
+        vm.expectRevert(abi.encodeWithSelector(CloakRFP.NoBestVendor.selector, tenderId));
+        vm.prank(buyer);
+        cloakRFP.closeTender(tenderId);
+    }
+
+    function test_cannotCloseTenderThatDoesNotExist() public {
+        vm.expectRevert(abi.encodeWithSelector(CloakRFP.TenderNotFound.selector, 0));
+        vm.prank(buyer);
+        cloakRFP.closeTender(0);
+    }
+
+    function test_cannotCloseTenderWhenPendingComparisonExists() public {
+        uint256 tenderId = _createTender();
+        _submitBid(tenderId, alice, 100, 5, 12, 20);
+        _submitBid(tenderId, brian, 80, 4, 12, 20);
+
+        vm.expectRevert(abi.encodeWithSelector(CloakRFP.PendingBestResolutionRequired.selector, tenderId, brian));
+        vm.prank(buyer);
+        cloakRFP.closeTender(tenderId);
+    }
+
+    function test_cannotCloseTenderTwice() public {
+        uint256 tenderId = _createTender();
+        _submitBid(tenderId, alice, 100, 5, 12, 20);
+
+        vm.prank(buyer);
+        cloakRFP.closeTender(tenderId);
+
+        vm.expectRevert(abi.encodeWithSelector(CloakRFP.TenderAlreadyClosed.selector, tenderId));
+        vm.prank(buyer);
+        cloakRFP.closeTender(tenderId);
+    }
+
+    function test_nonBuyerCannotCloseTender() public {
+        uint256 tenderId = _createTender();
+        _submitBid(tenderId, alice, 100, 5, 12, 20);
+
+        vm.expectRevert(abi.encodeWithSelector(CloakRFP.OnlyTenderBuyer.selector, tenderId, alice));
+        vm.prank(alice);
+        cloakRFP.closeTender(tenderId);
+    }
+
+    function test_cannotSubmitBidAfterTenderClosed() public {
+        uint256 tenderId = _createTender();
+        _submitBid(tenderId, alice, 100, 5, 12, 20);
+
+        vm.prank(buyer);
+        cloakRFP.closeTender(tenderId);
+
+        vm.expectRevert(abi.encodeWithSelector(CloakRFP.TenderClosedForBids.selector, tenderId));
+        _submitBid(tenderId, brian, 80, 4, 12, 20);
+    }
+
+    function test_getTenderExposesClosedState() public {
+        uint256 tenderId = _createTender();
+
+        (,,,, bool closedBefore,,,) = cloakRFP.getTender(tenderId);
+        assertFalse(closedBefore);
+
+        _submitBid(tenderId, alice, 100, 5, 12, 20);
+
+        vm.prank(buyer);
+        cloakRFP.closeTender(tenderId);
+
+        (,,,, bool closedAfter,,,) = cloakRFP.getTender(tenderId);
+        assertTrue(closedAfter);
+    }
+
+    function test_closingOneTenderDoesNotAffectAnotherTender() public {
+        uint256 firstTenderId = _createTender();
+        uint256 secondTenderId = _createTenderWithWeights(
+            "ipfs://rfp-open", CloakRFP.ScoringWeights({price: 2, deliveryDays: 8, warrantyMonths: 0, quantity: 1})
+        );
+
+        _submitBid(firstTenderId, alice, 100, 5, 12, 20);
+        _submitBid(secondTenderId, brian, 80, 4, 12, 20);
+
+        vm.prank(buyer);
+        cloakRFP.closeTender(firstTenderId);
+
+        (,,,, bool firstClosed, address firstBestVendor,,) = cloakRFP.getTender(firstTenderId);
+        (,,,, bool secondClosed, address secondBestVendor,, address secondPendingVendor) =
+            cloakRFP.getTender(secondTenderId);
+
+        assertTrue(firstClosed);
+        assertEq(firstBestVendor, alice);
+        assertFalse(secondClosed);
+        assertEq(secondBestVendor, brian);
+        assertEq(secondPendingVendor, address(0));
+
+        _submitBid(secondTenderId, carol, 90, 4, 12, 20);
+        (,,,,,,, address secondPendingAfter) = cloakRFP.getTender(secondTenderId);
+        assertEq(secondPendingAfter, carol);
     }
 
     function test_submitBidAndResolvePendingComparisonForSelectedTender() public {
@@ -116,20 +232,20 @@ contract CloakRFPTest is FhevmTest {
         _submitBid(secondTenderId, alice, 100, 5, 12, 20);
         _submitBid(secondTenderId, brian, 80, 3, 12, 20);
 
-        (,,,, address firstBestVendor, euint128 firstBestScore, address firstPendingVendor) =
+        (,,,,, address firstBestVendor, euint128 firstBestScore, address firstPendingVendor) =
             cloakRFP.getTender(firstTenderId);
         assertEq(firstBestVendor, alice);
         assertEq(decrypt(firstBestScore), 165);
         assertEq(firstPendingVendor, address(0));
 
-        (,,,, address secondBestVendorBefore,, address secondPendingVendor) = cloakRFP.getTender(secondTenderId);
+        (,,,,, address secondBestVendorBefore,, address secondPendingVendor) = cloakRFP.getTender(secondTenderId);
         assertEq(secondBestVendorBefore, alice);
         assertEq(secondPendingVendor, brian);
         assertTrue(decrypt(cloakRFP.getPendingComparison(secondTenderId, brian)));
 
         _resolvePending(secondTenderId, brian);
 
-        (,,,, address secondBestVendor, euint128 secondBestScore, address secondPendingAfter) =
+        (,,,,, address secondBestVendor, euint128 secondBestScore, address secondPendingAfter) =
             cloakRFP.getTender(secondTenderId);
         assertEq(secondBestVendor, brian);
         assertEq(decrypt(secondBestScore), 202);
@@ -142,14 +258,14 @@ contract CloakRFPTest is FhevmTest {
         _submitBid(tenderId, alice, 100, 5, 12, 20);
         _submitBid(tenderId, brian, 80, 4, 12, 20);
 
-        (,,,, address bestVendorBefore,, address pendingVendor) = cloakRFP.getTender(tenderId);
+        (,,,,, address bestVendorBefore,, address pendingVendor) = cloakRFP.getTender(tenderId);
         assertEq(bestVendorBefore, alice);
         assertEq(pendingVendor, brian);
         assertTrue(decrypt(cloakRFP.getPendingComparison(tenderId, brian)));
 
         _resolvePending(tenderId, brian);
 
-        (,,,, address bestVendor, euint128 bestScore, address pendingAfter) = cloakRFP.getTender(tenderId);
+        (,,,,, address bestVendor, euint128 bestScore, address pendingAfter) = cloakRFP.getTender(tenderId);
         assertEq(bestVendor, brian);
         assertEq(decrypt(bestScore), 140);
         assertEq(pendingAfter, address(0));
@@ -165,7 +281,7 @@ contract CloakRFPTest is FhevmTest {
 
         _resolvePending(tenderId, carol);
 
-        (,,,, address bestVendor, euint128 bestScore, address pendingAfter) = cloakRFP.getTender(tenderId);
+        (,,,,, address bestVendor, euint128 bestScore, address pendingAfter) = cloakRFP.getTender(tenderId);
         assertEq(bestVendor, alice);
         assertEq(decrypt(bestScore), 165);
         assertEq(pendingAfter, address(0));
@@ -175,7 +291,7 @@ contract CloakRFPTest is FhevmTest {
         uint256 tenderId = _createTender();
 
         _submitBid(tenderId, alice, 100, 5, 12, 20);
-        (,,,, address bestVendorBefore, euint128 bestScoreBefore, address pendingBefore) = cloakRFP.getTender(tenderId);
+        (,,,,, address bestVendorBefore, euint128 bestScoreBefore, address pendingBefore) = cloakRFP.getTender(tenderId);
 
         vm.expectRevert(abi.encodeWithSelector(CloakRFP.BidAlreadySubmitted.selector, tenderId, alice));
         vm.prank(alice);
@@ -193,7 +309,7 @@ contract CloakRFPTest is FhevmTest {
             })
         );
 
-        (,,,, address bestVendorAfter, euint128 bestScoreAfter, address pendingAfter) = cloakRFP.getTender(tenderId);
+        (,,,,, address bestVendorAfter, euint128 bestScoreAfter, address pendingAfter) = cloakRFP.getTender(tenderId);
         assertEq(bestVendorAfter, bestVendorBefore);
         assertEq(euint128.unwrap(bestScoreAfter), euint128.unwrap(bestScoreBefore));
         assertEq(decrypt(bestScoreAfter), 165);
@@ -215,7 +331,7 @@ contract CloakRFPTest is FhevmTest {
         assertFalse(decrypt(cloakRFP.getPendingComparison(tenderId, brian)));
         _resolvePending(tenderId, brian);
 
-        (,,,, address bestVendor, euint128 bestScore, address pendingAfter) = cloakRFP.getTender(tenderId);
+        (,,,,, address bestVendor, euint128 bestScore, address pendingAfter) = cloakRFP.getTender(tenderId);
         assertEq(bestVendor, alice);
         assertEq(decrypt(bestScore), high);
         assertEq(decrypt(cloakRFP.getBidScore(tenderId, brian)), uint128(1) << 64);

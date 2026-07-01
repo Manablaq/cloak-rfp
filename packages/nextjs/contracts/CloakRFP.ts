@@ -10,8 +10,21 @@ import type { ContractDeployment } from "~~/utils/contract";
 
 const REMOTE = {
   11155111: {
-    address: "0xDAf8F2cd955C146561ec7bCE802aabF227fda931",
+    address: "0xDf6f805ebbc3B2b216c3074A2Eaf97B5B6CA0AaA",
     abi: [
+      {
+        type: "function",
+        name: "closeTender",
+        inputs: [
+          {
+            name: "tenderId",
+            type: "uint256",
+            internalType: "uint256",
+          },
+        ],
+        outputs: [],
+        stateMutability: "nonpayable",
+      },
       {
         type: "function",
         name: "confidentialProtocolId",
@@ -169,6 +182,11 @@ const REMOTE = {
           },
           {
             name: "hasBest",
+            type: "bool",
+            internalType: "bool",
+          },
+          {
+            name: "closed",
             type: "bool",
             internalType: "bool",
           },
@@ -404,6 +422,31 @@ const REMOTE = {
       },
       {
         type: "event",
+        name: "TenderClosed",
+        inputs: [
+          {
+            name: "tenderId",
+            type: "uint256",
+            indexed: true,
+            internalType: "uint256",
+          },
+          {
+            name: "buyer",
+            type: "address",
+            indexed: true,
+            internalType: "address",
+          },
+          {
+            name: "winner",
+            type: "address",
+            indexed: true,
+            internalType: "address",
+          },
+        ],
+        anonymous: false,
+      },
+      {
+        type: "event",
         name: "TenderCreated",
         inputs: [
           {
@@ -455,12 +498,39 @@ const REMOTE = {
       },
       {
         type: "error",
+        name: "NoBestVendor",
+        inputs: [
+          {
+            name: "tenderId",
+            type: "uint256",
+            internalType: "uint256",
+          },
+        ],
+      },
+      {
+        type: "error",
         name: "NoPendingBest",
         inputs: [
           {
             name: "tenderId",
             type: "uint256",
             internalType: "uint256",
+          },
+        ],
+      },
+      {
+        type: "error",
+        name: "OnlyTenderBuyer",
+        inputs: [
+          {
+            name: "tenderId",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "caller",
+            type: "address",
+            internalType: "address",
           },
         ],
       },
@@ -498,6 +568,28 @@ const REMOTE = {
       },
       {
         type: "error",
+        name: "TenderAlreadyClosed",
+        inputs: [
+          {
+            name: "tenderId",
+            type: "uint256",
+            internalType: "uint256",
+          },
+        ],
+      },
+      {
+        type: "error",
+        name: "TenderClosedForBids",
+        inputs: [
+          {
+            name: "tenderId",
+            type: "uint256",
+            internalType: "uint256",
+          },
+        ],
+      },
+      {
+        type: "error",
         name: "TenderNotFound",
         inputs: [
           {
@@ -513,7 +605,7 @@ const REMOTE = {
         inputs: [],
       },
     ],
-    deployedOnBlock: 11174303,
+    deployedOnBlock: 11179019,
   },
 } as const;
 

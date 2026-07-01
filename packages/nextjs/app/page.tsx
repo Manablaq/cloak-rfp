@@ -52,6 +52,9 @@ const displayAddress = (address?: string, empty = "None") => {
   return shortenAddress(address);
 };
 
+const sameAddress = (first?: string, second?: string) =>
+  Boolean(first && second && first.toLowerCase() === second.toLowerCase());
+
 const parseUint32Input = (value: string) => {
   const trimmed = value.trim();
   if (!/^\d+$/.test(trimmed)) return undefined;
@@ -139,6 +142,13 @@ export default function Home() {
     if (!cloakRFP.tender) {
       return { label: "Loading", tone: "status-info", description: "Reading public tender state" };
     }
+    if (cloakRFP.tender.closed) {
+      return {
+        label: "Tender closed",
+        tone: "status-success",
+        description: "Final winner locked",
+      };
+    }
     if (cloakRFP.tender.hasPendingVendor) {
       return {
         label: "Pending comparison",
@@ -171,11 +181,35 @@ export default function Home() {
     return "";
   }, [cloakRFP.hasContract, cloakRFP.isConnected, cloakRFP.isWriting, form]);
 
+  const closeDisabledReason = useMemo(() => {
+    if (!cloakRFP.isConnected) return "Connect buyer wallet";
+    if (!cloakRFP.hasContract) return "Contract address missing";
+    if (cloakRFP.tenderMissing) return "Create a tender first";
+    if (!cloakRFP.tender) return `Load ${cloakRFP.selectedTenderLabel}`;
+    if (!sameAddress(cloakRFP.account, cloakRFP.tender.buyer)) return "Only buyer can finalize";
+    if (cloakRFP.tender.closed) return "Tender closed";
+    if (!cloakRFP.tender.hasPublicBestVendor) return "No current best vendor";
+    if (cloakRFP.tender.hasPendingVendor) return "Resolve pending comparison first";
+    if (cloakRFP.isClosingTender) return "Finalizing tender";
+    if (cloakRFP.isWriting) return "Confirming transaction";
+    return "";
+  }, [
+    cloakRFP.account,
+    cloakRFP.hasContract,
+    cloakRFP.isClosingTender,
+    cloakRFP.isConnected,
+    cloakRFP.isWriting,
+    cloakRFP.selectedTenderLabel,
+    cloakRFP.tender,
+    cloakRFP.tenderMissing,
+  ]);
+
   const bidDisabledReason = useMemo(() => {
     if (!cloakRFP.isConnected) return "Connect wallet";
     if (!cloakRFP.hasContract) return "Contract address missing";
     if (cloakRFP.tenderMissing) return "Create a tender first";
     if (!cloakRFP.tender) return `Load ${cloakRFP.selectedTenderLabel}`;
+    if (cloakRFP.tender.closed) return "Tender closed";
     if (cloakRFP.tender.hasPendingVendor) return "Resolve pending comparison first";
     if (hasBlankBidField(bidForm)) return "Enter all bid fields";
     if (!buildVendorBidForm(bidForm)) return "Use whole numbers from 0 to 4294967295";
@@ -198,6 +232,7 @@ export default function Home() {
     if (!cloakRFP.hasContract) return "Contract address missing";
     if (cloakRFP.tenderMissing) return "Create a tender first";
     if (!cloakRFP.tender) return `Load ${cloakRFP.selectedTenderLabel}`;
+    if (cloakRFP.tender.closed) return "Tender closed";
     if (!cloakRFP.tender.hasPendingVendor) return "No pending comparison";
     if (cloakRFP.isResolvingPendingBest) return "Resolving comparison";
     if (cloakRFP.isWriting) return "Confirming transaction";
@@ -242,6 +277,11 @@ export default function Home() {
   const onResolvePendingBest = async () => {
     if (resolveDisabledReason) return;
     await cloakRFP.resolvePendingBest();
+  };
+
+  const onCloseTender = async () => {
+    if (closeDisabledReason) return;
+    await cloakRFP.closeTender();
   };
 
   const copyContractAddress = async () => {
@@ -299,6 +339,8 @@ export default function Home() {
             <Reveal id="tender-dashboard">
               <TenderDashboard
                 cloakRFP={cloakRFP}
+                closeDisabledReason={closeDisabledReason}
+                onCloseTender={onCloseTender}
                 onResolvePendingBest={onResolvePendingBest}
                 resolveDisabledReason={resolveDisabledReason}
                 tenderStatus={tenderStatus}
@@ -566,11 +608,15 @@ function TenderBrowser({ cloakRFP }: { cloakRFP: ReturnType<typeof useCloakRFPWa
 
 function TenderDashboard({
   cloakRFP,
+  closeDisabledReason,
+  onCloseTender,
   onResolvePendingBest,
   resolveDisabledReason,
   tenderStatus,
 }: {
   cloakRFP: ReturnType<typeof useCloakRFPWagmi>;
+  closeDisabledReason: string;
+  onCloseTender: () => Promise<void>;
   onResolvePendingBest: () => Promise<void>;
   resolveDisabledReason: string;
   tenderStatus: { description: string; label: string; tone: string };
@@ -624,7 +670,7 @@ function TenderDashboard({
               wide
             />
             <InfoCard
-              label="Best vendor"
+              label={cloakRFP.tender.closed ? "Final winner" : "Best vendor"}
               title={cloakRFP.tender.bestVendor}
               value={displayAddress(cloakRFP.tender.bestVendor)}
             />
@@ -636,6 +682,12 @@ function TenderDashboard({
           </div>
 
           <BestVendorState tender={cloakRFP.tender} />
+
+          <FinalizeTenderPanel
+            cloakRFP={cloakRFP}
+            closeDisabledReason={closeDisabledReason}
+            onCloseTender={onCloseTender}
+          />
 
           <ResolvePendingPanel
             cloakRFP={cloakRFP}
@@ -684,11 +736,14 @@ function ResolvePendingPanel({
   resolveDisabledReason: string;
 }) {
   const hasPending = Boolean(cloakRFP.tender?.hasPendingVendor);
+  const isClosed = Boolean(cloakRFP.tender?.closed);
   const resolveTone = cloakRFP.resolveStatus === "error" ? "error" : "info";
-  const title = hasPending ? "Pending comparison ready" : "No pending comparison";
-  const detail = hasPending
-    ? `Public decryption will verify ${cloakRFP.selectedTenderLabel}'s encrypted comparison and update the best vendor state.`
-    : `${cloakRFP.selectedTenderLabel} is ready for the next encrypted vendor bid.`;
+  const title = isClosed ? "Tender closed" : hasPending ? "Pending comparison ready" : "No pending comparison";
+  const detail = isClosed
+    ? "Pending comparison resolution is disabled after finalization."
+    : hasPending
+      ? `Public decryption will verify ${cloakRFP.selectedTenderLabel}'s encrypted comparison and update the best vendor state.`
+      : `${cloakRFP.selectedTenderLabel} is ready for the next encrypted vendor bid.`;
   const buttonLabel =
     cloakRFP.resolveStatus === "decrypting"
       ? "Decrypting comparison"
@@ -715,6 +770,52 @@ function ResolvePendingPanel({
           {buttonLabel}
         </button>
         {cloakRFP.resolveMessage && <InlineMessage message={cloakRFP.resolveMessage} tone={resolveTone} />}
+      </div>
+    </div>
+  );
+}
+
+function FinalizeTenderPanel({
+  cloakRFP,
+  closeDisabledReason,
+  onCloseTender,
+}: {
+  cloakRFP: ReturnType<typeof useCloakRFPWagmi>;
+  closeDisabledReason: string;
+  onCloseTender: () => Promise<void>;
+}) {
+  const closeTone = cloakRFP.closeStatus === "error" ? "error" : "info";
+  const isClosed = Boolean(cloakRFP.tender?.closed);
+  const buttonLabel =
+    cloakRFP.closeStatus === "awaiting-wallet"
+      ? "Confirm in wallet"
+      : cloakRFP.closeStatus === "closing"
+        ? "Finalizing tender"
+        : closeDisabledReason || "Finalize tender";
+
+  return (
+    <div className={`resolve-panel ${isClosed ? "active" : ""}`}>
+      <div className="min-w-0">
+        <p className="micro-label">Buyer award</p>
+        <h3 className="mt-2 text-xl font-black tracking-[-0.035em] text-[var(--heading)]">
+          {isClosed ? "Tender closed" : "Finalize winner"}
+        </h3>
+        <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
+          {isClosed
+            ? "Final winner is locked. No more encrypted bids can be submitted."
+            : "The buyer can close this tender after all pending encrypted comparisons are resolved."}
+        </p>
+      </div>
+      <div className="resolve-action">
+        <button
+          className="primary-action compact"
+          disabled={Boolean(closeDisabledReason)}
+          onClick={onCloseTender}
+          type="button"
+        >
+          {buttonLabel}
+        </button>
+        {cloakRFP.closeMessage && <InlineMessage message={cloakRFP.closeMessage} tone={closeTone} />}
       </div>
     </div>
   );
@@ -848,6 +949,7 @@ function VendorBidPanel({
 }) {
   const messageTone = cloakRFP.bidStatus === "error" ? "error" : "info";
   const hasSelectedTender = Boolean(cloakRFP.tender);
+  const closedMessage = cloakRFP.tender?.closed ? "This tender is closed. New encrypted bids are disabled." : "";
   const pendingComparisonMessage = cloakRFP.tender?.hasPendingVendor
     ? "A pending encrypted comparison must be resolved before another bid can be submitted."
     : "";
@@ -868,9 +970,11 @@ function VendorBidPanel({
           {hasSelectedTender ? `Submit bid to ${cloakRFP.selectedTenderLabel}` : "Submit encrypted bid"}
         </h2>
         <p className="mt-3 text-sm leading-7 text-[var(--muted)]">
-          {hasSelectedTender
-            ? `Bid values are encrypted as euint32 inputs for ${cloakRFP.selectedTenderLabel}. Only handles and proofs are sent to the contract.`
-            : "Create or select a tender before submitting encrypted vendor terms."}
+          {cloakRFP.tender?.closed
+            ? "This tender is closed. New encrypted bids are disabled."
+            : hasSelectedTender
+              ? `Bid values are encrypted as euint32 inputs for ${cloakRFP.selectedTenderLabel}. Only handles and proofs are sent to the contract.`
+              : "Create or select a tender before submitting encrypted vendor terms."}
         </p>
       </div>
 
@@ -924,7 +1028,8 @@ function VendorBidPanel({
           {submitLabel}
         </button>
 
-        {pendingComparisonMessage && <InlineMessage message={pendingComparisonMessage} tone="info" />}
+        {closedMessage && <InlineMessage message={closedMessage} tone="info" />}
+        {pendingComparisonMessage && !closedMessage && <InlineMessage message={pendingComparisonMessage} tone="info" />}
         {cloakRFP.bidMessage && <InlineMessage message={cloakRFP.bidMessage} tone={messageTone} />}
       </div>
     </form>
@@ -941,35 +1046,45 @@ function BidState({ active, label, value }: { active: boolean; label: string; va
 }
 
 function BestVendorState({ tender }: { tender: NonNullable<ReturnType<typeof useCloakRFPWagmi>["tender"]> }) {
-  const state = tender.hasPendingVendor
+  const state = tender.closed
     ? {
-        eyebrow: "Best vendor state",
-        label: "Pending challenger",
-        detail: "Encrypted comparison needs resolution",
-        action: "Resolve pending comparison to update the best vendor state",
-        addressLabel: "Pending vendor",
-        address: tender.pendingVendor,
-        tone: "pending",
+        eyebrow: "Award state",
+        label: "Final winner",
+        detail: "Tender closed",
+        action: "No more encrypted bids can be submitted",
+        addressLabel: "Final winner",
+        address: tender.bestVendor,
+        tone: "resolved",
       }
-    : tender.hasPublicBestVendor
+    : tender.hasPendingVendor
       ? {
           eyebrow: "Best vendor state",
-          label: "Current best vendor",
-          detail: "Encrypted comparison resolved",
-          action: "Tender is ready for another vendor bid",
-          addressLabel: "Current leader",
-          address: tender.bestVendor,
-          tone: "resolved",
+          label: "Pending challenger",
+          detail: "Encrypted comparison needs resolution",
+          action: "Resolve pending comparison to update the best vendor state",
+          addressLabel: "Pending vendor",
+          address: tender.pendingVendor,
+          tone: "pending",
         }
-      : {
-          eyebrow: "Best vendor state",
-          label: "No bids yet",
-          detail: "Submit the first encrypted bid",
-          action: "Encrypted bid values stay private while public state tracks progress",
-          addressLabel: "Current leader",
-          address: undefined,
-          tone: "empty",
-        };
+      : tender.hasPublicBestVendor
+        ? {
+            eyebrow: "Best vendor state",
+            label: "Current best vendor",
+            detail: "Encrypted comparison resolved",
+            action: "Tender is ready for another vendor bid",
+            addressLabel: "Current leader",
+            address: tender.bestVendor,
+            tone: "resolved",
+          }
+        : {
+            eyebrow: "Best vendor state",
+            label: "No bids yet",
+            detail: "Submit the first encrypted bid",
+            action: "Encrypted bid values stay private while public state tracks progress",
+            addressLabel: "Current leader",
+            address: undefined,
+            tone: "empty",
+          };
 
   return (
     <div className={`best-vendor-state ${state.tone}`}>
@@ -1002,7 +1117,13 @@ function PrivacyStory() {
       </div>
       <div className="privacy-compact-grid">
         <PrivacyColumn
-          items={["Tender rules", "Buyer/vendor addresses", "Transaction activity", "Current best vendor address"]}
+          items={[
+            "Tender rules",
+            "Buyer/vendor addresses",
+            "Transaction activity",
+            "Current best vendor before close",
+            "Final winner address after close",
+          ]}
           kicker="Visible state"
           title="Public"
           variant="gold"

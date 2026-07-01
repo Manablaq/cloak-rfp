@@ -29,6 +29,7 @@ type TenderResult = readonly [
   metadataURI: string,
   weights: ScoringWeightsResult,
   hasBest: boolean,
+  closed: boolean,
   bestVendor: `0x${string}`,
   bestScore: `0x${string}`,
   pendingVendor: `0x${string}`,
@@ -51,6 +52,7 @@ export type VendorBidForm = {
 
 type BidStatus = "idle" | "encrypting" | "awaiting-wallet" | "submitting" | "confirmed" | "error";
 type ResolveStatus = "idle" | "ready" | "decrypting" | "awaiting-wallet" | "resolving" | "confirmed" | "error";
+type CloseStatus = "idle" | "awaiting-wallet" | "closing" | "confirmed" | "error";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
 
@@ -106,6 +108,9 @@ const formatBidError = (error: unknown, tenderLabel: string) => {
   if (message.includes("BidAlreadySubmitted")) {
     return `This wallet has already submitted a bid for ${tenderLabel}.`;
   }
+  if (message.includes("TenderClosedForBids")) {
+    return "This tender is closed. New encrypted bids are disabled.";
+  }
   if (message.includes("TenderNotFound")) {
     return `${tenderLabel} is not available yet.`;
   }
@@ -127,12 +132,40 @@ const formatResolveError = (error: unknown) => {
   if (message.includes("NoPendingBest") || message.includes("TenderNotFound")) {
     return "Pending comparison not found.";
   }
+  if (message.includes("TenderAlreadyClosed")) {
+    return "This tender is closed. Pending comparison resolution is disabled.";
+  }
   if (isRpcConnectionError(error)) {
     return "Could not reach local chain. Make sure pnpm chain is running, then refresh.";
   }
   const shortMessage = shortErrorMessage(error);
   if (shortMessage && shortMessage.length <= 140) return `Resolve failed: ${shortMessage}`;
   return "Resolve failed: refresh tender state, then try again.";
+};
+
+const formatCloseError = (error: unknown) => {
+  const message = formatError(error);
+  if (message.includes("User rejected") || message.includes("rejected the request")) {
+    return "Wallet confirmation cancelled.";
+  }
+  if (message.includes("OnlyTenderBuyer")) {
+    return "Only the tender buyer can finalize this tender.";
+  }
+  if (message.includes("NoBestVendor")) {
+    return "Cannot finalize until a current best vendor exists.";
+  }
+  if (message.includes("PendingBestResolutionRequired")) {
+    return "Resolve the pending encrypted comparison before finalizing.";
+  }
+  if (message.includes("TenderAlreadyClosed")) {
+    return "Tender is already closed.";
+  }
+  if (message.includes("TenderNotFound")) {
+    return "Tender not found.";
+  }
+  const shortMessage = shortErrorMessage(error);
+  if (shortMessage && shortMessage.length <= 140) return `Finalize failed: ${shortMessage}`;
+  return "Finalize failed: refresh tender state, then try again.";
 };
 
 export const useCloakRFPWagmi = () => {
@@ -147,10 +180,13 @@ export const useCloakRFPWagmi = () => {
   const [bidStatus, setBidStatus] = useState<BidStatus>("idle");
   const [resolveMessage, setResolveMessage] = useState("");
   const [resolveStatus, setResolveStatus] = useState<ResolveStatus>("idle");
+  const [closeMessage, setCloseMessage] = useState("");
+  const [closeStatus, setCloseStatus] = useState<CloseStatus>("idle");
   const [isWaitingForReceipt, setIsWaitingForReceipt] = useState(false);
   const [isManualRefreshing, setIsManualRefreshing] = useState(false);
   const [isSubmittingBid, setIsSubmittingBid] = useState(false);
   const [isResolvingPendingBest, setIsResolvingPendingBest] = useState(false);
+  const [isClosingTender, setIsClosingTender] = useState(false);
   const [selectedTenderId, setSelectedTenderId] = useState<bigint>(0n);
 
   const hasContract = Boolean(cloakRFP?.address && cloakRFP?.abi);
@@ -199,6 +235,8 @@ export const useCloakRFPWagmi = () => {
     setBidStatus("idle");
     setResolveMessage("");
     setResolveStatus("idle");
+    setCloseMessage("");
+    setCloseStatus("idle");
     setMessage(`Selected Tender #${tenderId.toString()}.`);
     setSelectedTenderId(tenderId);
   }, []);
@@ -302,7 +340,12 @@ export const useCloakRFPWagmi = () => {
   const submitBid = useCallback(
     async (form: VendorBidForm) => {
       if (!hasContract || !cloakRFP || !isConnected || !address || !tender || tenderMissing) return false;
-      if (tender[6] && !isAddressEqual(tender[6], ZERO_ADDRESS)) {
+      if (tender[4]) {
+        setBidStatus("error");
+        setBidMessage("This tender is closed. New encrypted bids are disabled.");
+        return false;
+      }
+      if (tender[7] && !isAddressEqual(tender[7], ZERO_ADDRESS)) {
         setBidStatus("error");
         setBidMessage("A pending encrypted comparison must be resolved before another bid can be submitted.");
         return false;
@@ -387,7 +430,12 @@ export const useCloakRFPWagmi = () => {
 
   const resolvePendingBest = useCallback(async () => {
     if (!hasContract || !cloakRFP || !isConnected || !tender || tenderMissing) return;
-    if (!tender[6] || isAddressEqual(tender[6], ZERO_ADDRESS)) {
+    if (tender[4]) {
+      setResolveStatus("error");
+      setResolveMessage("This tender is closed. Pending comparison resolution is disabled.");
+      return;
+    }
+    if (!tender[7] || isAddressEqual(tender[7], ZERO_ADDRESS)) {
       setResolveStatus("idle");
       setResolveMessage("Pending comparison not found.");
       return;
@@ -402,7 +450,7 @@ export const useCloakRFPWagmi = () => {
         address: cloakRFP.address,
         abi: cloakRFP.abi,
         functionName: "getPendingComparison",
-        args: [selectedTenderId, tender[6]],
+        args: [selectedTenderId, tender[7]],
       })) as `0x${string}`;
 
       const decrypted = await publicDecrypt.mutateAsync([pendingComparisonHandle]);
@@ -457,19 +505,83 @@ export const useCloakRFPWagmi = () => {
     writeContractAsync,
   ]);
 
+  const closeTender = useCallback(async () => {
+    if (!hasContract || !cloakRFP || !isConnected || !tender || tenderMissing) return false;
+    if (tender[4]) {
+      setCloseStatus("error");
+      setCloseMessage("Tender is already closed.");
+      return false;
+    }
+    if (!tender[3] || isAddressEqual(tender[5], ZERO_ADDRESS)) {
+      setCloseStatus("error");
+      setCloseMessage("Cannot finalize until a current best vendor exists.");
+      return false;
+    }
+    if (tender[7] && !isAddressEqual(tender[7], ZERO_ADDRESS)) {
+      setCloseStatus("error");
+      setCloseMessage("Resolve the pending encrypted comparison before finalizing.");
+      return false;
+    }
+
+    setIsClosingTender(true);
+    setCloseStatus("awaiting-wallet");
+    setCloseMessage("Waiting for wallet confirmation...");
+
+    try {
+      const hash = await writeContractAsync({
+        address: cloakRFP.address,
+        abi: cloakRFP.abi,
+        functionName: "closeTender",
+        args: [selectedTenderId],
+      });
+
+      setCloseStatus("closing");
+      setCloseMessage("Finalizing tender. Waiting for confirmation...");
+      await waitForTransactionReceipt(wagmiConfig, { hash });
+      const refresh = await refreshTenderForSource("create");
+      setCloseStatus("confirmed");
+      if (refresh.ok) {
+        setCloseMessage("Tender finalized and winner locked.");
+        setBidMessage("This tender is closed. New encrypted bids are disabled.");
+      } else {
+        setCloseMessage("Tender finalized. Refresh selected tender to verify final state.");
+      }
+      return true;
+    } catch (error) {
+      setCloseStatus("error");
+      setCloseMessage(formatCloseError(error));
+      return false;
+    } finally {
+      setIsClosingTender(false);
+    }
+  }, [
+    cloakRFP,
+    hasContract,
+    isConnected,
+    refreshTenderForSource,
+    selectedTenderId,
+    tender,
+    tenderMissing,
+    writeContractAsync,
+  ]);
+
   return {
     account: address,
     bidMessage,
     bidStatus,
     chainId,
+    closeMessage,
+    closeStatus,
+    closeTender,
     contractAddress: cloakRFP?.address,
     hasContract,
     isConnected,
     isLoadingTender: tenderRead.isFetching || isManualRefreshing,
     isLoadingTenderCount: tenderCountRead.isFetching,
     isResolvingPendingBest,
+    isClosingTender,
     isSubmittingBid,
-    isWriting: isWriting || isWaitingForReceipt || isResolvingPendingBest,
+    isWriting: isWriting || isWaitingForReceipt || isResolvingPendingBest || isClosingTender,
     message,
     readError,
     refreshTender,
@@ -477,7 +589,7 @@ export const useCloakRFPWagmi = () => {
     resolveMessage,
     resolvePendingBest,
     resolveStatus:
-      resolveStatus === "idle" && tender && !tenderMissing && !isAddressEqual(tender[6], ZERO_ADDRESS)
+      resolveStatus === "idle" && tender && !tenderMissing && !tender[4] && !isAddressEqual(tender[7], ZERO_ADDRESS)
         ? "ready"
         : resolveStatus,
     submitBid,
@@ -499,11 +611,12 @@ export const useCloakRFPWagmi = () => {
               quantity: tender[2].quantity,
             },
             hasBest: tender[3],
-            bestVendor: tender[4],
-            bestScore: tender[5],
-            pendingVendor: tender[6],
-            hasPublicBestVendor: !isAddressEqual(tender[4], ZERO_ADDRESS),
-            hasPendingVendor: !isAddressEqual(tender[6], ZERO_ADDRESS),
+            closed: tender[4],
+            bestVendor: tender[5],
+            bestScore: tender[6],
+            pendingVendor: tender[7],
+            hasPublicBestVendor: !isAddressEqual(tender[5], ZERO_ADDRESS),
+            hasPendingVendor: !isAddressEqual(tender[7], ZERO_ADDRESS),
           }
         : undefined,
   };

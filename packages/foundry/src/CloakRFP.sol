@@ -31,6 +31,7 @@ contract CloakRFP is ZamaEthereumConfig {
         ScoringWeights weights;
         bool exists;
         bool hasBest;
+        bool closed;
         address bestVendor;
         euint128 bestScore;
         address pendingVendor;
@@ -50,12 +51,17 @@ contract CloakRFP is ZamaEthereumConfig {
     event TenderCreated(uint256 indexed tenderId, address indexed buyer, string metadataURI);
     event BidSubmitted(uint256 indexed tenderId, address indexed vendor);
     event PendingBestResolved(uint256 indexed tenderId, address indexed vendor, bool isBetter);
+    event TenderClosed(uint256 indexed tenderId, address indexed buyer, address indexed winner);
 
     error TenderNotFound(uint256 tenderId);
     error PendingBestResolutionRequired(uint256 tenderId, address pendingVendor);
     error BidAlreadySubmitted(uint256 tenderId, address vendor);
     error NoPendingBest(uint256 tenderId);
     error InvalidDecryptionResult();
+    error OnlyTenderBuyer(uint256 tenderId, address caller);
+    error TenderAlreadyClosed(uint256 tenderId);
+    error TenderClosedForBids(uint256 tenderId);
+    error NoBestVendor(uint256 tenderId);
 
     function createTender(string calldata metadataURI, ScoringWeights calldata weights)
         external
@@ -74,6 +80,7 @@ contract CloakRFP is ZamaEthereumConfig {
 
     function submitBid(uint256 tenderId, EncryptedBid calldata encryptedBid) external {
         Tender storage tender = _getTender(tenderId);
+        if (tender.closed) revert TenderClosedForBids(tenderId);
         if (tender.pendingVendor != address(0)) {
             revert PendingBestResolutionRequired(tenderId, tender.pendingVendor);
         }
@@ -116,6 +123,7 @@ contract CloakRFP is ZamaEthereumConfig {
 
     function resolvePendingBest(uint256 tenderId, uint256 cleartext, bytes calldata decryptionProof) external {
         Tender storage tender = _getTender(tenderId);
+        if (tender.closed) revert TenderAlreadyClosed(tenderId);
         address pendingVendor = tender.pendingVendor;
         if (pendingVendor == address(0)) revert NoPendingBest(tenderId);
         if (cleartext > 1) revert InvalidDecryptionResult();
@@ -137,6 +145,19 @@ contract CloakRFP is ZamaEthereumConfig {
         emit PendingBestResolved(tenderId, pendingVendor, isBetter);
     }
 
+    function closeTender(uint256 tenderId) external {
+        Tender storage tender = _getTender(tenderId);
+        if (msg.sender != tender.buyer) revert OnlyTenderBuyer(tenderId, msg.sender);
+        if (tender.closed) revert TenderAlreadyClosed(tenderId);
+        if (!tender.hasBest || tender.bestVendor == address(0)) revert NoBestVendor(tenderId);
+        if (tender.pendingVendor != address(0)) {
+            revert PendingBestResolutionRequired(tenderId, tender.pendingVendor);
+        }
+
+        tender.closed = true;
+        emit TenderClosed(tenderId, msg.sender, tender.bestVendor);
+    }
+
     function getTender(uint256 tenderId)
         external
         view
@@ -145,6 +166,7 @@ contract CloakRFP is ZamaEthereumConfig {
             string memory metadataURI,
             ScoringWeights memory weights,
             bool hasBest,
+            bool closed,
             address bestVendor,
             euint128 bestScore,
             address pendingVendor
@@ -156,6 +178,7 @@ contract CloakRFP is ZamaEthereumConfig {
             tender.metadataURI,
             tender.weights,
             tender.hasBest,
+            tender.closed,
             tender.bestVendor,
             tender.bestScore,
             tender.pendingVendor

@@ -182,12 +182,12 @@ export default function Home() {
   }, [cloakRFP.hasContract, cloakRFP.isConnected, cloakRFP.isWriting, form]);
 
   const closeDisabledReason = useMemo(() => {
-    if (!cloakRFP.isConnected) return "Connect buyer wallet";
     if (!cloakRFP.hasContract) return "Contract address missing";
     if (cloakRFP.tenderMissing) return "Create a tender first";
     if (!cloakRFP.tender) return `Load ${cloakRFP.selectedTenderLabel}`;
-    if (!sameAddress(cloakRFP.account, cloakRFP.tender.buyer)) return "Only buyer can finalize";
     if (cloakRFP.tender.closed) return "Tender closed";
+    if (!cloakRFP.isConnected) return "Connect buyer wallet";
+    if (!sameAddress(cloakRFP.account, cloakRFP.tender.buyer)) return "Only buyer can finalize";
     if (!cloakRFP.tender.hasPublicBestVendor) return "No current best vendor";
     if (cloakRFP.tender.hasPendingVendor) return "Resolve pending comparison first";
     if (cloakRFP.isClosingTender) return "Finalizing tender";
@@ -784,14 +784,16 @@ function FinalizeTenderPanel({
   closeDisabledReason: string;
   onCloseTender: () => Promise<void>;
 }) {
-  const closeTone = cloakRFP.closeStatus === "error" ? "error" : "info";
   const isClosed = Boolean(cloakRFP.tender?.closed);
-  const buttonLabel =
-    cloakRFP.closeStatus === "awaiting-wallet"
+  const closeTone = !isClosed && cloakRFP.closeStatus === "error" ? "error" : "info";
+  const buttonLabel = isClosed
+    ? "Tender closed"
+    : cloakRFP.closeStatus === "awaiting-wallet"
       ? "Confirm in wallet"
       : cloakRFP.closeStatus === "closing"
         ? "Finalizing tender"
         : closeDisabledReason || "Finalize tender";
+  const closeMessage = isClosed ? "Tender finalized and winner locked." : cloakRFP.closeMessage;
 
   return (
     <div className={`resolve-panel ${isClosed ? "active" : ""}`}>
@@ -815,7 +817,7 @@ function FinalizeTenderPanel({
         >
           {buttonLabel}
         </button>
-        {cloakRFP.closeMessage && <InlineMessage message={cloakRFP.closeMessage} tone={closeTone} />}
+        {closeMessage && <InlineMessage message={closeMessage} tone={closeTone} />}
       </div>
     </div>
   );
